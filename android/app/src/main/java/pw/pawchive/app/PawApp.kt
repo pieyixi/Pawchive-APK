@@ -82,9 +82,8 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val focus = LocalFocusManager.current
-    val keyboard = LocalSoftwareKeyboardController.current
-    fun open(key: NavKey) { focus.clearFocus(); keyboard?.hide(); if (stack.lastOrNull() != key) stack.add(key) }
-    fun back() { focus.clearFocus(); keyboard?.hide(); if (stack.size > 1) stack.removeLastOrNull() }
+    fun open(key: NavKey) { focus.clearFocus(); if (stack.lastOrNull() != key) stack.add(key) }
+    fun back() { focus.clearFocus(); if (stack.size > 1) stack.removeLastOrNull() }
     var pendingFile by rememberSaveable { mutableStateOf<String?>(null) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     fun enqueue(file: RemoteFile, uri: Uri) {
@@ -129,7 +128,7 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     val latestBack by rememberUpdatedState<() -> Unit>({ back() })
     val latestSave by rememberUpdatedState(save)
     val latestDark by rememberUpdatedState(dark)
-    val selectTab: (Int) -> Unit = remember(focus, keyboard) { { next -> focus.clearFocus(); keyboard?.hide(); tab = next } }
+    val selectTab: (Int) -> Unit = remember(focus) { { next -> focus.clearFocus(); tab = next } }
     // NavEntry equality includes the content lambda identity. Keep the provider stable so
     // recomposition cannot overwrite NavDisplay's pop decision with an unchanged stack.
     val provider = remember(app, container, context) {
@@ -156,7 +155,7 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
         }
     }
     Surface(Modifier.fillMaxSize()) {
-        Scaffold(modifier = Modifier.safeDrawingPadding(), contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        Scaffold(modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).union(WindowInsets.waterfall)), contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbar, modifier = Modifier.imePadding()) }) { padding ->
             holder.SaveableStateProvider(tab) {
                 NavDisplay(backStack = stack, modifier = Modifier.padding(padding).then(if (stack.size > 1) Modifier.imePadding() else Modifier).clipToBounds(), onBack = { back() },
@@ -187,9 +186,15 @@ private fun RootDestination(tab: Int, onSelect: (Int) -> Unit, icons: Navigation
     val pixels = with(LocalDensity.current) { ReferenceMetrics.BottomIconViewport.roundToPx() }
     LaunchedEffect(pixels) { icons.request(pixels) }
     ReportDrawnWhen { images?.pixels == pixels }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("root_destination_$tab")) {
-        Box(Modifier.fillMaxWidth().weight(1f).imePadding()) { content() }
-        if (WindowInsets.ime.getBottom(LocalDensity.current) == 0) BottomTabs(tab, images?.takeIf { it.pixels == pixels }, onSelect)
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    val barPixels = with(density) { ReferenceMetrics.BottomBarHeight.roundToPx() } + 1
+    // Resolve both insets during layout, on the same frame as the system IME animation.
+    // The outer Scaffold consumes system bars only; this root exclusively owns its IME inset.
+    val contentInsets = WindowInsets.ime.union(WindowInsets.navigationBars.add(WindowInsets(bottom = barPixels)))
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("root_destination_$tab")) {
+        Box(Modifier.fillMaxSize().windowInsetsPadding(contentInsets)) { content() }
+        if (imeBottom == 0) Box(Modifier.align(Alignment.BottomCenter)) { BottomTabs(tab, images?.takeIf { it.pixels == pixels }, onSelect) }
     }
 }
 

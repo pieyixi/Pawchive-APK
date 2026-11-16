@@ -14,7 +14,8 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 interface PawApi {
-    @GET("posts") suspend fun posts(@Query("q") query: String = "", @Query("o") offset: Int = 0): List<Post>
+    @GET("posts") suspend fun posts(@Query("q") query: String = "", @Query("o") offset: Int = 0,
+        @Query("hide") hide: String? = null, @Query("only") only: String? = null): List<Post>
     @GET("{service}/user/{user}") suspend fun authorPosts(@Path("service") service: String, @Path("user") user: String, @Query("o") offset: Int = 0): List<Post>
     @GET("{service}/user/{user}/profile") suspend fun author(@Path("service") service: String, @Path("user") user: String): Creator
     @GET("{service}/user/{user}/post/{post}") suspend fun post(@Path("service") service: String, @Path("user") user: String, @Path("post") post: String): Post

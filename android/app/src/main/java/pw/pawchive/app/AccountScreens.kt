@@ -63,6 +63,10 @@ private fun MenuRow(label: String, click: () -> Unit, icon: @Composable () -> Un
 }
 @Composable
 fun CollectionScreen(kind: String, app: AppViewModel, back: () -> Unit, author: (Creator) -> Unit, post: (Post) -> Unit) {
+    val account by app.account.collectAsStateWithLifecycle()
+    LaunchedEffect(kind, account.owner, account.restoring) {
+        if (kind == "favorite" && !account.restoring) app.action("sync:favorite") { app.repo.syncFavorites() }
+    }
     val follows by app.follows.collectAsStateWithLifecycle()
     val favorites by app.favorites.collectAsStateWithLifecycle()
     val history by app.history.collectAsStateWithLifecycle()

@@ -15,6 +15,11 @@ import kotlinx.serialization.*
 import kotlinx.serialization.json.decodeToSequence
 import kotlinx.serialization.json.DecodeSequenceMode
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import androidx.sqlite.db.SupportSQLiteQuery
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SimpleSQLiteQuery
+import androidx.room.migration.Migration
 import okhttp3.*
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
@@ -27,12 +32,18 @@ data class FeedStatus(val running: Boolean = false, val error: String? = null, v
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PawRepository(private val context: Context, private val scope: CoroutineScope,
-    val publicClient: OkHttpClient = siteClient(), database: PawDatabase? = null) {
-    val db = database ?: Room.databaseBuilder(context, PawDatabase::class.java, "pawchive.db").build()
+    val publicClient: OkHttpClient = siteClient(), database: PawDatabase? = null, sessionClient: OkHttpClient? = null) {
+    val db = database ?: Room.databaseBuilder(context, PawDatabase::class.java, "pawchive.db")
+        .addMigrations(object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE creators ADD COLUMN indexed INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE creators ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0")
+            }
+        }).build()
     val dao = db.dao()
     val api = pawApi(publicClient)
     private val vault = SessionVault(context)
-    private var accountClient = siteClient()
+    private var accountClient = sessionClient ?: siteClient()
     private var accountApi = pawApi(accountClient)
     private val generation = AtomicLong(0)
     private val sessionMutex = Mutex()
@@ -60,7 +71,7 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
             accountClient = siteClient(jar); accountApi = pawApi(accountClient)
             account.value = AccountState(saved.username, false)
             // Network failure retains encrypted login; only explicit unauthorized invalidates it.
-            runCatching { syncFavorites() }.onFailure {
+            runCatching { syncFollowedAuthors() }.onFailure {
                 if (it is retrofit2.HttpException && it.code() == 401) logout()
             }
         } else account.value = AccountState(restoring = false)
@@ -128,13 +139,27 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         if (selected) dao.collect(CollectionRow(owner, kind, key, System.currentTimeMillis(), wireJson.encodeToString(post.compact())))
         else dao.uncollect(owner, kind, key)
     }
-    fun feed(): Flow<List<Post>> = account.flatMapLatest { dao.watchPosts("${it.owner}:feed").map { rows -> rows.map { wireJson.decodeFromString<Post>(it.payload) } } }.flowOn(Dispatchers.Default)
+    fun feed(): Flow<List<Post>> = account.flatMapLatest { dao.watchPosts("${it.owner}:feed").map { rows -> rows.map { wireJson.decodeFromString<Post>(it.payload) }.sortedByDescending { it.feedTimestamp } } }.flowOn(Dispatchers.Default)
     suspend fun cachedPosts(scope: String): List<Post> = withContext(Dispatchers.Default) { dao.posts(scope).map { wireJson.decodeFromString<Post>(it.payload) } }
 
     private suspend fun replaceAuthors(owner: String, authors: List<Creator>) = db.withTransaction {
+        val previous = dao.collection(owner, "author").associate { it.key to it.payload }
+        if (previous.size == authors.size && authors.all { previous[it.key] == wireJson.encodeToString(it) }) return@withTransaction
         dao.clearCollection(owner, "author")
         authors.forEach { dao.collect(CollectionRow(owner, "author", it.key, it.timestamp, wireJson.encodeToString(it))) }
     }
+    suspend fun syncFollowedAuthors(): List<Creator> = withContext(Dispatchers.IO) { collectionMutex.withLock {
+        val state = account.value
+        if (state.username == null) return@withLock dao.collection(state.owner, "author").map { wireJson.decodeFromString<Creator>(it.payload) }
+        val token = generation.get()
+        val authors = try { accountApi.favoriteAuthors() } catch (e: retrofit2.HttpException) {
+            if (e.code() == 401) { expireSession(token); throw IOException("登录已失效，请重新登录") }; throw e
+        }
+        if (token != generation.get()) throw CancellationException("Account changed")
+        db.withTransaction { replaceAuthors(state.owner, authors) }
+        authors
+    } }
+
     suspend fun syncFavorites() = withContext(Dispatchers.IO) { collectionMutex.withLock {
         val state = account.value; if (state.username == null) return@withLock
         val token = generation.get(); val requestApi = accountApi
@@ -187,10 +212,14 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
             publicClient.newCall(builder.build()).await().use { response ->
                 if (response.code != 304) {
                     response.requireSuccess()
+                    val existing = mutableMapOf<String, String>()
+                    var pageOffset = 0
+                    do { val rows = dao.creatorPage(pageOffset); rows.forEach { existing[it.key] = it.payload }; pageOffset += rows.size } while (rows.size == 500)
                     val sequence = wireJson.decodeToSequence<Creator>(response.body!!.byteStream(), DecodeSequenceMode.ARRAY_WRAPPED)
                     sequence.chunked(500).forEach { chunk ->
                         currentCoroutineContext().ensureActive()
-                        dao.creators(chunk.map { CreatorRow(it.key, it.name, it.service, it.timestamp, wireJson.encodeToString(it)) })
+                        val changed = chunk.filter { creator -> existing[creator.key] != wireJson.encodeToString(creator) }
+                        if (changed.isNotEmpty()) dao.creators(changed.map { it.creatorRow() })
                     }
                     response.header("Last-Modified")?.let { dao.metadata(Metadata("index.modified", it)) }
                 }
@@ -198,9 +227,40 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
             dao.metadata(Metadata("index.checked", System.currentTimeMillis().toString()))
         } finally { indexLoading.value = false }
     } }
-    suspend fun searchAuthors(query: String, offset: Int = 0): List<Creator> = withContext(Dispatchers.IO) {
+    private fun Creator.creatorRow() = CreatorRow(key, name, service, timestamp, wireJson.encodeToString(this), timeValue(indexed), timeValue(favorited) / 1000)
+
+    /** Backfill only new sort columns after the non-destructive v1 -> v2 migration. */
+    suspend fun prepareAuthorFilters(filters: SearchFilters) = withContext(Dispatchers.IO) { indexMutex.withLock {
+        if (filters.sort in setOf("indexed", "hot") && dao.metadata("index.sort-fields") != "2") {
+            var offset = 0
+            do {
+                val rows = dao.creatorPage(offset)
+                dao.creators(rows.map { wireJson.decodeFromString<Creator>(it.payload).creatorRow() })
+                offset += rows.size
+            } while (rows.size == 500)
+            dao.metadata(Metadata("index.sort-fields", "2"))
+        }
+        if (filters.ai != "all" && System.currentTimeMillis() - (dao.metadata("creator.ai.checked")?.toLongOrNull() ?: 0) > 86_400_000) {
+            val tagged = publicClient.newCall(Request.Builder().url("$SITE/api/v1/creators?only=ai").build()).await().requireSuccess().use {
+                wireJson.decodeFromString<List<Creator>>(it.body!!.string())
+            }
+            db.withTransaction {
+                dao.clearAiCreators()
+                dao.metadata(tagged.map { Metadata("creator.ai:${it.key}", "1") })
+                dao.metadata(Metadata("creator.ai.checked", System.currentTimeMillis().toString()))
+            }
+        }
+    } }
+    suspend fun searchAuthors(query: String, offset: Int = 0, filters: SearchFilters = SearchFilters()): List<Creator> = withContext(Dispatchers.IO) {
         val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        dao.searchCreators(escaped, offset).map { wireJson.decodeFromString(it.payload) }
+        val args = mutableListOf<Any>("%$escaped%")
+        val where = StringBuilder("name LIKE ? ESCAPE '\\'")
+        if (filters.service != "all") { where.append(" AND service = ?"); args += filters.service }
+        if (filters.ai != "all") where.append(" AND ${if (filters.ai == "hide") "NOT " else ""}EXISTS (SELECT 1 FROM metadata m WHERE m.`key` = 'creator.ai:' || creators.`key`)")
+        val column = when (filters.sort) { "updated" -> "updated"; "indexed" -> "indexed"; "hot" -> "favorited"; else -> "name COLLATE NOCASE" }
+        val direction = if (filters.order == "desc") "DESC" else "ASC"
+        args += offset
+        dao.filterCreators(SimpleSQLiteQuery("SELECT * FROM creators WHERE $where ORDER BY $column $direction, name COLLATE NOCASE ASC, `key` ASC LIMIT 50 OFFSET ?", args.toTypedArray())).map { wireJson.decodeFromString(it.payload) }
     }
     suspend fun popularPosts(offset: Int): List<Post> = withContext(Dispatchers.IO) {
         val cache = "public:home:popular"
@@ -227,7 +287,7 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         val key = "$service:$user"
         profileLocks[(key.hashCode() and Int.MAX_VALUE) % profileLocks.size].withLock {
             dao.creator(key)?.let { wireJson.decodeFromString<Creator>(it.payload) }
-                ?: profileGate.withPermit { api.author(service, user) }.also { dao.creators(listOf(CreatorRow(it.key, it.name, it.service, it.timestamp, wireJson.encodeToString(it)))) }
+                ?: profileGate.withPermit { api.author(service, user) }.also { dao.creators(listOf(it.creatorRow())) }
         }
     }
     suspend fun post(service: String, user: String, id: String): Post = withContext(Dispatchers.IO) {
@@ -237,7 +297,7 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
     }
     suspend fun storePosts(scope: String, posts: List<Post>) = db.withTransaction {
         dao.clearPosts(scope)
-        dao.posts(posts.map { PostRow(scope, it.key, it.timestamp, wireJson.encodeToString(it)) })
+        dao.posts(posts.map { PostRow(scope, it.key, if (scope.endsWith(":feed")) it.feedTimestamp else it.timestamp, wireJson.encodeToString(it)) })
         dao.metadata(Metadata("cache.access:$scope", System.currentTimeMillis().toString()))
         dao.trimCaches("post:%", "cache.access:post:%", 200)
         dao.trimCaches("public:home:%", "cache.access:public:home:%", 10)
@@ -246,46 +306,100 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         dao.trimCacheMetadata()
     }
 
+    data class FeedMetrics(val elapsedMs: Long = 0, val authorListRequests: Int = 0, val postRequests: Int = 0,
+        val targets: Int = 0, val received: Int = 0, val pendingBackfills: Int = 0)
+    val feedMetrics = MutableStateFlow(FeedMetrics())
+
     suspend fun refreshFeed(manual: Boolean = true) = withContext(Dispatchers.IO) {
         if (!feedMutex.tryLock()) return@withContext
+        val started = android.os.SystemClock.elapsedRealtime()
         val token = generation.get(); val state = account.value; val cacheScope = "${state.owner}:feed"
+        var listRequests = 0; var postRequests = 0; var received = 0; var pending = 0; var targetCount = 0
         feedStatus.value = FeedStatus(running = true)
         try {
-            if (state.username != null) syncFavorites()
-            val follows = dao.collection(state.owner, "author").map { wireJson.decodeFromString<Creator>(it.payload) }
+            // Logged-in API returns timestamps for only followed creators in one request.
+            // No favorite-post sync, global index refresh or eight-author audit in this path.
+            val follows = if (state.username != null) { listRequests++; withTimeoutOrNull(12_000) { syncFollowedAuthors() } ?: throw IOException("网站响应超时，已保留旧动态") }
+                else dao.collection(state.owner, "author").map { wireJson.decodeFromString<Creator>(it.payload) }
             if (follows.isEmpty()) { if (generation.get() == token) dao.clearPosts(cacheScope); return@withContext }
-            // Reuse the shared conditionally fetched creator index; failed index still permits bounded audits.
-            runCatching { refreshCreatorIndex() }.onFailure { if (it is CancellationException) throw it }
+            val creators = if (state.username != null && follows.all { it.timestamp > 0 }) follows else {
+                // Guest/missing server timestamps: retain a complete, conditionally fetched discovery fallback.
+                listRequests++; refreshCreatorIndex()
+                follows.map { a -> dao.creator(a.key)?.let { wireJson.decodeFromString<Creator>(it.payload) } ?: a }
+            }
             val marks = dao.marks(cacheScope).associateBy { it.key }
             val now = System.currentTimeMillis()
-            val creators = follows.map { a -> dao.creator(a.key)?.let { wireJson.decodeFromString<Creator>(it.payload) } ?: a }
-            val unchanged = creators.filter { a -> marks[a.key]?.let { it.updated >= a.timestamp } == true }.sortedBy { marks[it.key]?.checked ?: 0 }
-            val audits = (unchanged.filter { now - (marks[it.key]?.checked ?: 0) > 600_000 }.take(8) +
-                if (manual) unchanged.filter { now - (marks[it.key]?.checked ?: 0) > 60_000 }.take(2) else emptyList()).map { it.key }.toSet()
-            val targets = creators.filter { a -> marks[a.key] == null || a.timestamp > marks[a.key]!!.updated || a.key in audits }
+            val cursors = creators.associate { a -> a.key to (dao.metadata("feed.backfill:$cacheScope:${a.key}")?.split(',') ?: emptyList()) }
+            // Site timestamps can be rounded to an hour; overlap only two recently updated creators.
+            val overlap = if (manual) creators.filter { a -> a.timestamp > now - 3_600_000 && now - (marks[a.key]?.checked ?: 0) > 300_000 }
+                .sortedByDescending { it.timestamp }.take(2).map { it.key }.toSet() else emptySet()
+            val targets = creators.filter { a -> marks[a.key] == null || a.timestamp != marks[a.key]!!.updated || cursors[a.key]!!.isNotEmpty() || a.key in overlap }
+                .sortedByDescending { it.timestamp }
+            targetCount = targets.size
             feedStatus.value = FeedStatus(true, total = targets.size)
             val followedKeys = follows.map { it.key }.toSet()
-            val old = dao.posts(cacheScope).map { wireJson.decodeFromString<Post>(it.payload) }.filter { it.authorKey in followedKeys }
-            val incoming = mutableListOf<Post>(); val successful = mutableListOf<SyncMark>(); val errors = mutableListOf<String>()
-            val mutex = Mutex(); val gate = Semaphore(3)
+            var current = dao.posts(cacheScope).map { wireJson.decodeFromString<Post>(it.payload) }.filter { it.authorKey in followedKeys }
+            // Re-index legacy cached rows by added time, without clearing visible content.
+            if (generation.get() == token && (dao.metadata("feed.sort:$cacheScope") != "added" || current.size != dao.posts(cacheScope).size)) {
+                db.withTransaction { storePosts(cacheScope, mergeFeed(current, emptyList())); dao.metadata(Metadata("feed.sort:$cacheScope", "added")) }
+            }
+            val previousByAuthor = current.groupBy { it.authorKey }.mapValues { (_, posts) -> posts.map { it.key }.toSet() }
+            val mutex = Mutex(); val gate = Semaphore(3); val errors = mutableListOf<String>()
             coroutineScope { targets.map { author -> async { gate.withPermit {
                 try {
-                    val previous = old.filter { it.authorKey == author.key }.map { it.key }.toSet()
-                    var batch = api.authorPosts(author.service, author.id)
-                    if (previous.isNotEmpty() && batch.size >= 50 && batch.none { it.key in previous }) batch += api.authorPosts(author.service, author.id, 50)
+                    val mark = marks[author.key]
+                    val cursor = cursors[author.key].orEmpty()
+                    val pendingOffset = cursor.takeIf { it.size == 2 && it[0].toLongOrNull() != null }?.get(1)?.toIntOrNull()?.takeIf { it > 0 && it % 50 == 0 }
+                    val needsHead = mark == null || mark.updated != author.timestamp || author.key in overlap
+                    var resumeAfterHead = pendingOffset.takeIf { needsHead }
+                    val previousIds = previousByAuthor[author.key].orEmpty()
+                    val batch = mutableListOf<Post>()
+                    var offset = if (needsHead) 0 else pendingOffset ?: 0
+                    var continuing = offset > 0
+                    var backfill = false
+                    // Most updates need just the first page. A changed creator with no fresh imports
+                    // there is a historical-import candidate; continue up to three pages, saving a cursor.
+                    for (page in 0..2) {
+                        mutex.withLock { postRequests++ }
+                        val posts = withTimeoutOrNull(20_000) { api.authorPosts(author.service, author.id, offset) } ?: throw IOException("作者更新超时")
+                        batch += posts
+                        // A new import must not reset an unfinished historical scan to page one.
+                        // Read the fresh head, then resume the saved historical page.
+                        if (resumeAfterHead != null && posts.size >= 50) {
+                            offset = resumeAfterHead; resumeAfterHead = null; continuing = true; backfill = true
+                            continue
+                        }
+                        resumeAfterHead = null
+                        offset += posts.size
+                        backfill = posts.size >= 50 && (continuing || (mark != null && author.timestamp != mark.updated &&
+                            (posts.none { timeValue(it.added) >= author.timestamp } || (previousIds.isNotEmpty() && posts.none { it.key in previousIds }))))
+                        if (posts.size < 50 || !backfill) break
+                        if (page < 2) yield()
+                    }
                     mutex.withLock {
-                        incoming.addAll(batch.map { it.compact() }); successful.add(SyncMark(cacheScope, author.key, author.timestamp, now))
+                        if (generation.get() != token) throw CancellationException("Account changed")
+                        db.withTransaction {
+                            val merged = mergeFeed(current, batch.map { it.compact() })
+                            storePosts(cacheScope, merged)
+                            dao.mark(SyncMark(cacheScope, author.key, author.timestamp, now))
+                            val key = "feed.backfill:$cacheScope:${author.key}"
+                            if (backfill) { dao.metadata(Metadata(key, "${author.timestamp},$offset")); pending++ } else dao.removeMetadata(key)
+                        }
+                        current = mergeFeed(current, batch.map { it.compact() })
+                        received += batch.size
                         feedStatus.value = feedStatus.value.copy(checked = feedStatus.value.checked + 1)
                     }
-                } catch (e: Exception) { if (e is CancellationException) throw e; mutex.withLock { errors.add(author.name) } }
+                } catch (e: Exception) { if (e is CancellationException) throw e; mutex.withLock { errors.add(author.key) } }
             } } }.awaitAll() }
-            if (generation.get() == token) db.withTransaction {
-                storePosts(cacheScope, mergeFeed(old, incoming)); successful.forEach { dao.mark(it) }
-            }
-            feedStatus.value = FeedStatus(error = if (errors.isEmpty()) null else "${errors.size} 位作者更新失败，已保留旧动态")
+            if (generation.get() == token) feedStatus.value = FeedStatus(error = if (errors.isEmpty()) null else "${errors.size} 位作者更新失败，已保留旧动态")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            feedStatus.value = FeedStatus(error = e.message ?: "刷新失败，已保留旧动态")
-        } finally { feedStatus.value = feedStatus.value.copy(running = false); feedMutex.unlock() }
+            if (generation.get() == token) feedStatus.value = FeedStatus(error = e.message ?: "刷新失败，已保留旧动态")
+        } finally {
+            feedMetrics.value = FeedMetrics(android.os.SystemClock.elapsedRealtime() - started, listRequests, postRequests, targetCount, received, pending)
+            android.util.Log.d("PawFeed", "refresh=${feedMetrics.value}")
+            if (generation.get() == token) feedStatus.value = feedStatus.value.copy(running = false)
+            feedMutex.unlock()
+        }
     }
 }

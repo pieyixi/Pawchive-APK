@@ -51,6 +51,7 @@ data class Post(
     val key get() = "$service:$user:$id"
     val authorKey get() = "$service:$user"
     val timestamp get() = timeValue(published).takeIf { it > 0 } ?: timeValue(added)
+    val feedTimestamp get() = timeValue(added).takeIf { it > 0 } ?: timestamp
     val files get() = (listOfNotNull(file) + attachments).filter { it.path.isNotBlank() }.distinctBy { it.path }
     val images get() = files.filter { it.isImage }
     val videos get() = files.filter { it.isVideo }
@@ -70,6 +71,6 @@ fun timeValue(value: JsonElement?): Long {
 /** Bounded merge also preserves older entries when a single author request fails. */
 fun mergeFeed(old: List<Post>, incoming: List<Post>): List<Post> {
     val seen = HashMap<String, Int>()
-    return (incoming + old).distinctBy { it.key }.sortedByDescending { it.timestamp }
+    return (incoming + old).distinctBy { it.key }.sortedByDescending { it.feedTimestamp }
         .filter { seen.merge(it.authorKey, 1, Int::plus)!! <= 60 }.take(500)
 }

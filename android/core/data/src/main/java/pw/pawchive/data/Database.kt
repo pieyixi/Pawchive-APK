@@ -4,7 +4,8 @@ import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "creators", indices = [Index("name"), Index("updated")])
-data class CreatorRow(@PrimaryKey val key: String, val name: String, val service: String, val updated: Long, val payload: String)
+data class CreatorRow(@PrimaryKey val key: String, val name: String, val service: String, val updated: Long, val payload: String,
+    @ColumnInfo(defaultValue = "0") val indexed: Long = 0, @ColumnInfo(defaultValue = "0") val favorited: Long = 0)
 @Entity(tableName = "posts", primaryKeys = ["scope", "key"], indices = [Index(value = ["scope", "time"])])
 data class PostRow(val scope: String, val key: String, val time: Long, val payload: String)
 @Entity(tableName = "marks", primaryKeys = ["scope", "key"])
@@ -25,6 +26,10 @@ interface PawDao {
     @Upsert suspend fun creators(rows: List<CreatorRow>)
     @Query("SELECT * FROM creators WHERE name LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY name COLLATE NOCASE ASC, `key` ASC LIMIT :limit OFFSET :offset")
     suspend fun searchCreators(query: String, offset: Int = 0, limit: Int = 50): List<CreatorRow>
+    @androidx.room.RawQuery suspend fun filterCreators(query: androidx.sqlite.db.SupportSQLiteQuery): List<CreatorRow>
+    @Query("SELECT * FROM creators ORDER BY `key` LIMIT :limit OFFSET :offset") suspend fun creatorPage(offset: Int, limit: Int = 500): List<CreatorRow>
+    @Query("DELETE FROM metadata WHERE `key` LIKE 'creator.ai:%'") suspend fun clearAiCreators()
+    @Upsert suspend fun metadata(rows: List<Metadata>)
     @Query("SELECT COUNT(*) FROM creators") suspend fun creatorCount(): Int
     @Query("SELECT * FROM creators WHERE `key` = :key") suspend fun creator(key: String): CreatorRow?
     @Upsert suspend fun posts(rows: List<PostRow>)
@@ -53,5 +58,5 @@ interface PawDao {
     @Query("DELETE FROM metadata WHERE `key` = :key") suspend fun removeMetadata(key: String)
 }
 
-@Database(entities = [CreatorRow::class, PostRow::class, SyncMark::class, CollectionRow::class, DownloadRow::class, Metadata::class], version = 1, exportSchema = true)
+@Database(entities = [CreatorRow::class, PostRow::class, SyncMark::class, CollectionRow::class, DownloadRow::class, Metadata::class], version = 2, exportSchema = true)
 abstract class PawDatabase : RoomDatabase() { abstract fun dao(): PawDao }

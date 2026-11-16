@@ -6,12 +6,12 @@ fun List<Post>.visibleWorks(mediaOnly: Boolean): List<Post> = if (mediaOnly) fil
 data class WorkSearchPage(val rawPosts: List<Post>, val nextOffset: Int, val more: Boolean)
 
 /** Filtering never changes the server offset. Bound sparse searches to three requests per load. */
-suspend fun loadWorkSearchPage(api: PawApi, query: String, offset: Int, mediaOnly: Boolean): WorkSearchPage {
+suspend fun loadWorkSearchPage(api: PawApi, query: String, offset: Int, mediaOnly: Boolean, filters: SearchFilters = SearchFilters()): WorkSearchPage {
     val raw = mutableListOf<Post>()
     var nextOffset = offset
     var more = true
     repeat(if (mediaOnly) 3 else 1) {
-        val batch = api.posts(query, nextOffset)
+        val batch = api.posts(filters.workQuery(query), nextOffset, hide = "ai".takeIf { filters.ai == "hide" }, only = "ai".takeIf { filters.ai == "only" })
         nextOffset += batch.size
         raw.addAll(batch)
         more = batch.size >= 50

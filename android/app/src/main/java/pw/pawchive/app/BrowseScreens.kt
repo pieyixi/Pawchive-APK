@@ -1,6 +1,16 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package pw.pawchive.app
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -42,38 +52,66 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     val category = pager.currentPage
     val vm: HomeViewModel = viewModel(key = "home-page-$category", factory = vmFactory { HomeViewModel(app.repo, it, category) })
     val query by key(category) { vm.query.collectAsStateWithLifecycle() }
+    val filters by key(category) { vm.filters.collectAsStateWithLifecycle() }
+    var filtering by rememberSaveable { mutableStateOf(false) }
+    var filterSession by remember { mutableIntStateOf(0) }
+    var searchFocused by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    val panelOffset = with(density) { 12.dp.roundToPx() }
+    val inputStyle = TextStyle(fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurface,
+        platformStyle = PlatformTextStyle(includeFontPadding = false))
+    BackHandler(filtering) { filtering = false }
     val follows by app.follows.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    // Keep the input connection alive through the IME exit. Stopping it mid-animation
+    // restarts this phone's IME surface and makes the keyboard jump back up.
+    LaunchedEffect(filtering, imeBottom) {
+        if (filtering && imeBottom == 0) focus.clearFocus()
+    }
     LaunchedEffect(pager) {
-        snapshotFlow { pager.isScrollInProgress }.filter { it }.collect { focus.clearFocus(); keyboard?.hide() }
+        snapshotFlow { pager.isScrollInProgress }.filter { it }.collect { filtering = false; focus.clearFocus() }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(Modifier.size(48.dp).clickable(onClick = onMine), contentAlignment = Alignment.Center) { Avatar(null) }
-            BasicTextField(value = query, onValueChange = vm::query, modifier = Modifier.weight(1f).heightIn(min = 48.dp), singleLine = true,
-                textStyle = TextStyle(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            Box(Modifier.size(48.dp).clickable { filtering = false; onMine() }, contentAlignment = Alignment.Center) { Avatar(null) }
+            BasicTextField(value = query, onValueChange = vm::query, modifier = Modifier.weight(1f).height(48.dp).testTag("home_search_input")
+                    .pointerInput(Unit) {
+                        awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); filtering = false }
+                    }
+                    .onFocusChanged { searchFocused = it.isFocused; if (it.isFocused) filtering = false }, singleLine = true,
+                textStyle = inputStyle, cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); vm.load(false) }),
                 decorationBox = { input -> Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-                    Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().height(36.dp).testTag("home_search_outline").border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Box(Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 8.dp)) {
-                            if (query.isEmpty()) Text(if (category == 0) "搜索作者" else "搜索作品", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Box(Modifier.weight(1f).height(36.dp).padding(horizontal = 8.dp), contentAlignment = Alignment.CenterStart) {
+                            if (query.isEmpty()) Text(if (category == 0) "搜索作者" else "搜索作品", style = inputStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             input()
                         }
                         if (query.isNotEmpty()) IconButton(onClick = { vm.query("") }, modifier = Modifier.size(36.dp)) { Icon(Icons.Outlined.Close, "清空搜索", Modifier.size(18.dp)) }
                     }
                 } })
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            PagerTabStrip(listOf("作者", "作品"), pager, beforeChange = { focus.clearFocus(); keyboard?.hide() })
+        Box(Modifier.fillMaxWidth()) {
+            Box(Modifier.align(Alignment.Center)) { PagerTabStrip(listOf("作者", "作品"), pager, beforeChange = { filtering = false; focus.clearFocus() }) }
+            IconButton(onClick = {
+                if (filtering) filtering = false else { filterSession++; filtering = true; keyboard?.hide() }
+            }, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).size(44.dp).testTag("advanced_search_button")) {
+                Icon(painterResource(R.drawable.ic_search_filter), "高级搜索", Modifier.size(22.dp), tint = if (filters.isDefault) MaterialTheme.colorScheme.onSurfaceVariant else Pink)
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f).testTag("home_pager"), key = { it }) { page ->
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize().testTag("home_pager"), key = { it }, userScrollEnabled = !filtering) { page ->
             val pageVm: HomeViewModel = viewModel(key = "home-page-$page", factory = vmFactory { HomeViewModel(app.repo, it, page) })
             val state by pageVm.state.collectAsStateWithLifecycle()
             ReportDrawnWhen { page != pager.currentPage || !state.loading || state.creators.isNotEmpty() || state.posts.isNotEmpty() }
             val grid = rememberLazyGridState()
+            val pageQuery by pageVm.query.collectAsStateWithLifecycle()
+            val pageFilters by pageVm.filters.collectAsStateWithLifecycle()
+            LaunchedEffect(pageQuery, pageFilters) { grid.scrollToItem(0) }
             val last by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 } }
             val visibleCreators = state.creators.filter { author -> blocked.none { it.key == author.key } }
             val visiblePosts = state.posts.filter { post -> blocked.none { it.key == post.authorKey } }
@@ -102,6 +140,18 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                     }
                 }
             }
+        }
+        // The keyboard owns the transition out. Open the panel only after its inset is zero.
+        // Both are in the activity window, so header taps keep the original text-input connection.
+        androidx.compose.animation.AnimatedVisibility(visible = filtering && imeBottom == 0 && !searchFocused,
+            enter = fadeIn(tween(120)) + slideInVertically(tween(160)) { -panelOffset },
+            exit = fadeOut(tween(100)) + slideOutVertically(tween(120)) { -panelOffset }) {
+            key(filterSession, category) {
+                AdvancedSearchPanel(category == 0, filters, maxWidth, maxHeight, dismiss = { filtering = false }) { value ->
+                    filtering = false; vm.filters(value)
+                }
+            }
+        }
         }
     }
 }
@@ -144,8 +194,8 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     LaunchedEffect(pulse) { if (pulse > 0) list.animateScrollToItem(0) }
     val refresh = rememberPullToRefreshState()
     val ordered = remember(follows, posts, blocked) {
-        val times = posts.groupBy { it.authorKey }.mapValues { (_, p) -> p.maxOf { it.timestamp } }
-        follows.filter { author -> blocked.none { it.key == author.key } }.sortedByDescending { times[it.key] ?: it.timestamp }
+        val times = posts.groupBy { it.authorKey }.mapValues { (_, p) -> p.maxOf { it.feedTimestamp } }
+        follows.filter { author -> blocked.none { it.key == author.key } }.sortedByDescending { maxOf(times[it.key] ?: 0, it.timestamp) }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Text("动态", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
@@ -173,7 +223,7 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                             Box(Modifier.size(48.dp).clickable { if (author != null) onAuthor(author) }, contentAlignment = Alignment.Center) { Avatar(author, Modifier.size(40.dp)) }
                             Column(Modifier.padding(start = 8.dp).weight(1f)) {
                                 Text(author?.name ?: post.user, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
-                                Text(displayTime(post.timestamp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                                Text(displayTime(post.feedTimestamp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                             }
                         }
                         Text(post.title, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, modifier = Modifier.padding(vertical = 10.dp))
