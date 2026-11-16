@@ -13,4 +13,4 @@ cd android
 
 Android 8.0 or newer is required.
 
-GPL-3.0-or-later. The reader includes code adapted from [Pupil](https://github.com/tom5079/Pupil) by tom5079; see [NOTICE.md](NOTICE.md).
+Licensed under GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
