@@ -30,6 +30,7 @@ interface PawDao {
     @Query("SELECT * FROM creators ORDER BY `key` LIMIT :limit OFFSET :offset") suspend fun creatorPage(offset: Int, limit: Int = 500): List<CreatorRow>
     @Query("DELETE FROM metadata WHERE `key` LIKE 'creator.ai:%'") suspend fun clearAiCreators()
     @Upsert suspend fun metadata(rows: List<Metadata>)
+    @Query("SELECT * FROM metadata WHERE `key` LIKE 'search.page:%'") suspend fun searchPageMetadata(): List<Metadata>
     @Query("SELECT COUNT(*) FROM creators") suspend fun creatorCount(): Int
     @Query("SELECT * FROM creators WHERE `key` = :key") suspend fun creator(key: String): CreatorRow?
     @Upsert suspend fun posts(rows: List<PostRow>)

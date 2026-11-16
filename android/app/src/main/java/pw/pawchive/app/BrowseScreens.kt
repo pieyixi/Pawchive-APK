@@ -56,6 +56,7 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     var filtering by rememberSaveable { mutableStateOf(false) }
     var filterSession by remember { mutableIntStateOf(0) }
     var searchFocused by remember { mutableStateOf(false) }
+    var clearAfterIme by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
     val panelOffset = with(density) { 12.dp.roundToPx() }
@@ -67,8 +68,8 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     val keyboard = LocalSoftwareKeyboardController.current
     // Keep the input connection alive through the IME exit. Stopping it mid-animation
     // restarts this phone's IME surface and makes the keyboard jump back up.
-    LaunchedEffect(filtering, imeBottom) {
-        if (filtering && imeBottom == 0) focus.clearFocus()
+    LaunchedEffect(filtering, clearAfterIme, imeBottom) {
+        if ((filtering || clearAfterIme) && imeBottom == 0) { focus.clearFocus(); clearAfterIme = false }
     }
     LaunchedEffect(pager) {
         snapshotFlow { pager.isScrollInProgress }.filter { it }.collect { filtering = false; focus.clearFocus() }
@@ -78,11 +79,11 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             Box(Modifier.size(48.dp).clickable { filtering = false; onMine() }, contentAlignment = Alignment.Center) { Avatar(null) }
             BasicTextField(value = query, onValueChange = vm::query, modifier = Modifier.weight(1f).height(48.dp).testTag("home_search_input")
                     .pointerInput(Unit) {
-                        awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); filtering = false }
+                        awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); filtering = false; clearAfterIme = false }
                     }
                     .onFocusChanged { searchFocused = it.isFocused; if (it.isFocused) filtering = false }, singleLine = true,
                 textStyle = inputStyle, cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); vm.load(false) }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { clearAfterIme = true; keyboard?.hide(); vm.load(false, force = true) }),
                 decorationBox = { input -> Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
                     Row(Modifier.fillMaxWidth().height(36.dp).testTag("home_search_outline").border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -96,9 +97,9 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
         }
         Box(Modifier.fillMaxWidth()) {
             Box(Modifier.align(Alignment.Center)) { PagerTabStrip(listOf("作者", "作品"), pager, beforeChange = { filtering = false; focus.clearFocus() }) }
-            IconButton(onClick = {
+            Box(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).size(44.dp).testTag("advanced_search_button").quietClick {
                 if (filtering) filtering = false else { filterSession++; filtering = true; keyboard?.hide() }
-            }, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).size(44.dp).testTag("advanced_search_button")) {
+            }, contentAlignment = Alignment.Center) {
                 Icon(painterResource(R.drawable.ic_search_filter), "高级搜索", Modifier.size(22.dp), tint = if (filters.isDefault) MaterialTheme.colorScheme.onSurfaceVariant else Pink)
             }
         }
@@ -132,7 +133,7 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     when {
                         state.loading -> StatusContent(true)
-                        state.error != null -> StatusContent(false, state.error) { pageVm.load(false) }
+                        state.error != null -> StatusContent(false, state.error) { pageVm.load(false, force = true) }
                         count == 0 -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                             StatusContent(false, "没有匹配结果")
                             if (state.more && page == 1) TextButton(onClick = { pageVm.load(true) }) { Text("继续查找") }
@@ -205,8 +206,8 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             } }
         }
         PullToRefreshBox(isRefreshing = status.running, onRefresh = { app.refreshFeed() }, state = refresh, modifier = Modifier.weight(1f), indicator = {
-            if (refresh.distanceFraction > 0 || status.running) Box(Modifier.align(Alignment.TopCenter).offset { IntOffset(0, ((if (status.running) 1f else refresh.distanceFraction).coerceAtMost(1.5f) * 60 - 48).dp.roundToPx()) }.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(Modifier.size(26.dp), color = Pink, strokeWidth = 2.5.dp)
+            if (refresh.distanceFraction > 0 || status.running) Box(Modifier.align(Alignment.TopCenter).offset { IntOffset(0, ((if (status.running) 1f else refresh.distanceFraction).coerceAtMost(1.5f) * 60 - 48).dp.roundToPx()) }.size(44.dp).testTag("feed_refresh_spinner"), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(26.dp), color = Pink, trackColor = androidx.compose.ui.graphics.Color.Transparent, strokeWidth = 2.5.dp)
             }
         }) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {

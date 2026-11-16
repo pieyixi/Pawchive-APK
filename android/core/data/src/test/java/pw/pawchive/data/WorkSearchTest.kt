@@ -8,6 +8,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkSearchTest {
+    @Test fun firstUsefulPageDoesNotWaitForTwentyFourMediaResults() = runTest {
+        MockWebServer().use { server ->
+            val first = post(1, RemoteFile("a.png", "/a.png"))
+            server.page(listOf(first) + (2..50).map { post(it) })
+            val page = loadWorkSearchPage(pawApi(siteClient(), server.url("/api/v1/").toString()), "JK", 0, true)
+            assertEquals(1, server.requestCount)
+            assertEquals(listOf(first), page.rawPosts.visibleWorks(true))
+            assertEquals(50, page.nextOffset); assertTrue(page.more)
+        }
+    }
     private fun post(id: Int, file: RemoteFile? = null) = Post("$id", "qa", "qa", file = file)
     private fun MockWebServer.page(posts: List<Post>) = enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(wireJson.encodeToString(posts)))
 

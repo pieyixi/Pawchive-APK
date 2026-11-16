@@ -1,6 +1,7 @@
 package pw.pawchive.app
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
@@ -32,6 +33,10 @@ import pw.pawchive.data.*
 import java.time.LocalDate
 import java.time.YearMonth
 
+internal fun Modifier.quietClick(enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, enabled = enabled, onClick = onClick)
+}
+
 private val FilterPink = Color(0xFFFF6699)
 @Composable private fun chipColor() = if (MaterialTheme.colorScheme.background.luminance() < .5f) Color(0xFF242429) else Color(0xFFF6F7F9)
 private val centeredType = TextStyle(fontWeight = FontWeight.Normal, platformStyle = PlatformTextStyle(includeFontPadding = false))
@@ -44,7 +49,7 @@ fun AdvancedSearchPanel(author: Boolean, filters: SearchFilters, panelWidth: Dp,
     fun update(value: SearchFilters) { raw = wireJson.encodeToString(value) }
     var dateField by rememberSaveable { mutableStateOf<String?>(null) }
     Box(Modifier.width(panelWidth).height(panelHeight).testTag("advanced_search_overlay")) {
-        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .46f)).clickable(onClick = dismiss))
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .46f)).quietClick(onClick = dismiss))
             Column(Modifier.fillMaxWidth().heightIn(max = 450.dp).background(MaterialTheme.colorScheme.background).pointerInput(Unit) { detectTapGestures { } }.testTag("advanced_search_panel")) {
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 16.dp)) {
                     if (author) {
@@ -96,7 +101,7 @@ fun AdvancedSearchPanel(author: Boolean, filters: SearchFilters, panelWidth: Dp,
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { (value, text) ->
                     Box(Modifier.weight(1f).height(36.dp).testTag("filter_${key}_$value").semantics { this.selected = selected == value; role = Role.RadioButton }
-                        .clickable { select(value) }, contentAlignment = Alignment.Center) {
+                        .quietClick { select(value) }, contentAlignment = Alignment.Center) {
                         Box(Modifier.fillMaxWidth().height(26.2.dp).clip(RoundedCornerShape(1.6.dp)).background(chipColor()), contentAlignment = Alignment.Center) {
                             Text(text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, textAlign = TextAlign.Center, style = centeredType,
                                 color = if (selected == value) Pink else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -110,7 +115,7 @@ fun AdvancedSearchPanel(author: Boolean, filters: SearchFilters, panelWidth: Dp,
 }
 @Composable private fun DateField(value: String, placeholder: Boolean, label: String, modifier: Modifier, click: () -> Unit) {
     val date = LocalDate.parse(value)
-    Box(modifier.height(36.dp).semantics { contentDescription = label }.clickable(onClick = click), contentAlignment = Alignment.Center) {
+    Box(modifier.height(36.dp).semantics { contentDescription = label }.quietClick(onClick = click), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxWidth().height(26.2.dp).clip(RoundedCornerShape(1.6.dp)).background(chipColor()), contentAlignment = Alignment.Center) {
             Text("${date.year}年${date.monthValue}月${date.dayOfMonth}日", fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, style = centeredType,
                 color = if (placeholder) Color(0xFFC5C5C8) else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -118,7 +123,7 @@ fun AdvancedSearchPanel(author: Boolean, filters: SearchFilters, panelWidth: Dp,
     }
 }
 @Composable private fun FlatAction(text: String, modifier: Modifier, background: Color, color: Color, enabled: Boolean = true, click: () -> Unit) {
-    Box(modifier.fillMaxHeight().clip(RoundedCornerShape(1.6.dp)).background(background).clickable(enabled = enabled, onClick = click), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxHeight().clip(RoundedCornerShape(1.6.dp)).background(background).quietClick(enabled = enabled, onClick = click), contentAlignment = Alignment.Center) {
         Text(text, fontSize = 13.sp, lineHeight = 20.sp, style = centeredType, color = color.copy(alpha = if (enabled) 1f else .4f))
     }
 }
@@ -135,14 +140,14 @@ fun ReferenceDatePicker(initial: LocalDate, min: LocalDate, max: LocalDate, dism
         BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
             Column(Modifier.widthIn(max = 320.dp).fillMaxWidth().heightIn(max = minOf(493.dp, maxHeight)).background(MaterialTheme.colorScheme.background).testTag("reference_date_picker")) {
                 Column(Modifier.fillMaxWidth().height(101.dp).background(FilterPink).padding(start = 24.dp, top = 15.dp, end = 12.dp)) {
-                    Text("${selected.year}年", fontSize = 16.sp, lineHeight = 24.sp, color = Color.White.copy(alpha = .7f), modifier = Modifier.clickable { years = !years }.testTag("calendar_year"))
+                    Text("${selected.year}年", fontSize = 16.sp, lineHeight = 24.sp, color = Color.White.copy(alpha = .7f), modifier = Modifier.quietClick { years = !years }.testTag("calendar_year"))
                     Text("${selected.monthValue}月${selected.dayOfMonth}日周${"一二三四五六日"[selected.dayOfWeek.value - 1]}", fontSize = 36.sp, lineHeight = 48.sp, style = centeredType, color = Color.White, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
                 }
                 if (years) {
                     val yearList = rememberLazyListState(initialFirstVisibleItemIndex = (selected.year - min.year - 3).coerceAtLeast(0))
                     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 336.dp).weight(1f, fill = false).testTag("calendar_years"), state = yearList) {
                         items((min.year..max.year).toList()) { year ->
-                            Box(Modifier.fillMaxWidth().height(48.dp).clickable {
+                            Box(Modifier.fillMaxWidth().height(48.dp).quietClick {
                                 val next = selected.withYear(year).coerceIn(min, max); selectedText = next.toString(); monthText = YearMonth.from(next).toString(); years = false
                             }, contentAlignment = Alignment.Center) { Text("${year}年", fontSize = if (year == selected.year) 24.sp else 17.sp, color = if (year == selected.year) FilterPink else MaterialTheme.colorScheme.onSurface) }
                         }
@@ -151,9 +156,9 @@ fun ReferenceDatePicker(initial: LocalDate, min: LocalDate, max: LocalDate, dism
                     Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                         val prev = month.minusMonths(1)
                         val next = month.plusMonths(1)
-                        Box(Modifier.width(40.dp)) { if (prev.atEndOfMonth() >= min) IconButton(onClick = { monthText = prev.toString() }, modifier = Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "上个月", Modifier.size(24.dp)) } }
+                        Box(Modifier.width(40.dp)) { if (prev.atEndOfMonth() >= min) Box(Modifier.size(40.dp).quietClick { monthText = prev.toString() }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "上个月", Modifier.size(24.dp)) } }
                         Text("${month.year}年${month.monthValue}月", Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 16.sp, style = centeredType)
-                        Box(Modifier.width(40.dp)) { if (next.atDay(1) <= max) IconButton(onClick = { monthText = next.toString() }, modifier = Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "下个月", Modifier.size(24.dp)) } }
+                        Box(Modifier.width(40.dp)) { if (next.atDay(1) <= max) Box(Modifier.size(40.dp).quietClick { monthText = next.toString() }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "下个月", Modifier.size(24.dp)) } }
                     }
                     Row(Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                         "一二三四五六日".forEach { Text(it.toString(), Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, style = centeredType) }
@@ -166,7 +171,7 @@ fun ReferenceDatePicker(initial: LocalDate, min: LocalDate, max: LocalDate, dism
                                 if (day !in 1..month.lengthOfMonth()) Spacer(Modifier.weight(1f).height(40.dp)) else {
                                     val date = month.atDay(day); val enabled = date in min..max; val active = date == selected
                                     Box(Modifier.weight(1f).height(40.dp).testTag("calendar_$date").semantics { this.selected = active; contentDescription = "${date.year}年${date.monthValue}月${date.dayOfMonth}日" }
-                                        .clickable(enabled = enabled) { selectedText = date.toString() }, contentAlignment = Alignment.Center) {
+                                        .quietClick(enabled = enabled) { selectedText = date.toString() }, contentAlignment = Alignment.Center) {
                                         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape).then(if (active) Modifier.background(FilterPink) else Modifier), contentAlignment = Alignment.Center) {
                                             Text(day.toString(), fontSize = 13.sp, style = centeredType, color = when { active -> Color.White; !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = .3f); date == LocalDate.now() -> Color(0xFFCE7B98); else -> MaterialTheme.colorScheme.onSurface })
                                         }
@@ -178,9 +183,9 @@ fun ReferenceDatePicker(initial: LocalDate, min: LocalDate, max: LocalDate, dism
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(Modifier.fillMaxWidth().height(55.dp)) {
-                    Box(Modifier.weight(1f).fillMaxHeight().clickable(onClick = dismiss).testTag("calendar_cancel"), contentAlignment = Alignment.Center) { Text("取消", fontSize = 16.sp, style = centeredType) }
+                    Box(Modifier.weight(1f).fillMaxHeight().quietClick(onClick = dismiss).testTag("calendar_cancel"), contentAlignment = Alignment.Center) { Text("取消", fontSize = 16.sp, style = centeredType) }
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Box(Modifier.weight(1f).fillMaxHeight().clickable { confirm(selected) }.testTag("calendar_confirm"), contentAlignment = Alignment.Center) { Text("确定", fontSize = 16.sp, style = centeredType) }
+                    Box(Modifier.weight(1f).fillMaxHeight().quietClick { confirm(selected) }.testTag("calendar_confirm"), contentAlignment = Alignment.Center) { Text("确定", fontSize = 16.sp, style = centeredType) }
                 }
             }
         }

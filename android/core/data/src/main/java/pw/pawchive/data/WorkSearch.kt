@@ -15,7 +15,11 @@ suspend fun loadWorkSearchPage(api: PawApi, query: String, offset: Int, mediaOnl
         nextOffset += batch.size
         raw.addAll(batch)
         more = batch.size >= 50
-        if (!more || !mediaOnly || raw.count { it.hasVisualMedia } >= 24) return WorkSearchPage(raw, nextOffset, more)
+        if (!more || !mediaOnly || raw.any { it.hasVisualMedia }) return WorkSearchPage(raw, nextOffset, more)
     }
     return WorkSearchPage(raw, nextOffset, more)
 }
+
+@kotlinx.serialization.Serializable
+data class SearchPageCursor(val nextOffset: Int, val more: Boolean, val checkedAt: Long, val rawCount: Int)
+data class CachedWorkPage(val page: WorkSearchPage, val checkedAt: Long)

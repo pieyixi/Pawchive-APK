@@ -61,6 +61,7 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
     fun filters(value: SearchFilters) { saved["filters"] = wireJson.encodeToString(value) }
     val state = MutableStateFlow(HomeState(loading = true))
     private var request: Job? = null
+    private var debounceJob: Job? = null
     private var offset = 0
     private var requestId = 0L
     private var rawPosts = emptyList<Post>()
@@ -74,48 +75,71 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
         }
         viewModelScope.launch {
             var previous: Triple<String, Int, SearchFilters>? = null
-            combine(query, category, filters) { q, c, f -> Triple(q, c, f) }.distinctUntilChanged().collectLatest { value ->
-                if (previous != null && previous!!.second == value.second && previous!!.third == value.third) delay(250)
+            combine(query, category, filters) { q, c, f -> Triple(q, c, f) }.distinctUntilChanged().collect { value ->
+                val debounce = previous != null && previous!!.second == value.second && previous!!.third == value.third
                 previous = value
-                load(false)
+                debounceJob?.cancel()
+                if (debounce) debounceJob = viewModelScope.launch { delay(250); load(false) }
+                else load(false)
             }
         }
     }
     fun query(value: String) { saved["query"] = value }
     fun category(value: Int) { if (value != category.value) saved["category"] = value }
-    fun load(append: Boolean) {
+    private var authorMaintenanceStarted = false
+    fun load(append: Boolean, force: Boolean = false) {
+        if (force && !append) debounceJob?.cancel()
         if (append && (state.value.loading || !state.value.more)) return
         request?.cancel(); val token = ++requestId; val q = query.value; val type = category.value; val options = filters.value
-        if (!append) { offset = 0; rawPosts = emptyList(); state.value = HomeState(loading = true) }
-        else state.value = state.value.copy(loading = true, error = null)
+        val started = android.os.SystemClock.elapsedRealtime()
+        if (!append) offset = 0
+        state.value = state.value.copy(loading = true, error = null)
         request = viewModelScope.launch {
+            var cacheHit = false
             try {
                 if (type == 0) {
-                    if (!append) {
-                        repo.prepareAuthorFilters(options)
-                        val cached = repo.searchAuthors(q, filters = options)
-                        if (cached.isNotEmpty()) state.value = HomeState(creators = cached, loading = true)
-                        val checked = repo.dao.metadata("index.checked")?.toLongOrNull() ?: 0
-                        if (repo.dao.creatorCount() == 0 || System.currentTimeMillis() - checked > (if (options.sort == "updated") 120_000 else 86_400_000)) repo.refreshCreatorIndex()
-                    }
+                    // Local sorts never wait on a full-site index download.
+                    if (repo.dao.creatorCount() == 0) repo.refreshCreatorIndex()
+                    repo.prepareAuthorFilters(options)
                     val batch = repo.searchAuthors(q, offset, options)
                     if (token == requestId) { state.value = HomeState(creators = if (append) (state.value.creators + batch).distinctBy { it.key } else batch, more = batch.size == 50); offset += batch.size }
+                    if (!authorMaintenanceStarted) {
+                        authorMaintenanceStarted = true
+                        viewModelScope.launch {
+                            runCatching {
+                                repo.prepareAuthorFilters(SearchFilters(sort = "hot"))
+                                val checked = repo.dao.metadata("index.checked")?.toLongOrNull() ?: 0
+                                if (System.currentTimeMillis() - checked > 86_400_000) repo.refreshCreatorIndex()
+                            }.onFailure { if (it is CancellationException) throw it }
+                        }
+                    }
                 } else {
                     mediaOnly = repo.hideMediaLessWorks.first() && (q.isNotBlank() || !options.isDefault)
                     val popular = q.isBlank() && options.isDefault
                     val cache = if (popular) "public:home:popular" else "public:home:$q:${wireJson.encodeToString(options)}"
                     if (!append) {
-                        val cached = repo.cachedPosts(cache)
-                        if (cached.isNotEmpty()) { rawPosts = cached; state.value = HomeState(posts = cached.visibleWorks(mediaOnly), loading = true) }
+                        val cachedPage = if (popular) null else repo.cachedWorkPage(cache)
+                        val cached = cachedPage?.page?.rawPosts ?: repo.cachedPosts(cache)
+                        if (cachedPage != null || cached.isNotEmpty()) {
+                            rawPosts = cached
+                            offset = cachedPage?.page?.nextOffset ?: cached.size
+                            val fresh = cachedPage != null && System.currentTimeMillis() - cachedPage.checkedAt in 0L..300_000L && !force
+                            state.value = HomeState(posts = cached.visibleWorks(mediaOnly), loading = !fresh, more = cachedPage?.page?.more ?: true)
+                            if (fresh) { cacheHit = true; return@launch }
+                        } else { rawPosts = emptyList(); state.value = HomeState(loading = true) }
+                        // Expired cache is a display fallback, not the next network offset.
+                        offset = 0
                     }
-                    val batch = if (popular) repo.popularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) } else loadWorkSearchPage(repo.api, q, offset, mediaOnly, options)
+                    val batch = if (popular) repo.popularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) }
+                        else withTimeoutOrNull(20_000) { loadWorkSearchPage(repo.api, q, offset, mediaOnly, options) } ?: throw java.io.IOException("网站响应较慢，请重试")
                     if (token == requestId) {
-                        rawPosts = if (append) (rawPosts + batch.rawPosts).distinctBy { it.key } else batch.rawPosts
+                        if (!append && !popular) repo.storeWorkPage(cache, batch)
+                        rawPosts = (if (append) (rawPosts + batch.rawPosts).distinctBy { it.key } else batch.rawPosts).distinctBy { it.key }.map { it.compact() }
                         state.value = HomeState(posts = rawPosts.visibleWorks(mediaOnly), more = batch.more); offset = batch.nextOffset
-                        if (!append && !popular) repo.storePosts(cache, rawPosts.map { it.compact() })
                     }
                 }
             } catch (e: Exception) { if (e is CancellationException) throw e; if (token == requestId) state.value = state.value.copy(loading = false, error = e.message ?: "加载失败") }
+            finally { android.util.Log.d("PawSearch", "page type=$type sort=${options.sort} media=${options.media} cached=$cacheHit elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}") }
         }
     }
 }

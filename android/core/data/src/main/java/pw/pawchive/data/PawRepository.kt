@@ -230,15 +230,29 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
     private fun Creator.creatorRow() = CreatorRow(key, name, service, timestamp, wireJson.encodeToString(this), timeValue(indexed), timeValue(favorited) / 1000)
 
     /** Backfill only new sort columns after the non-destructive v1 -> v2 migration. */
-    suspend fun prepareAuthorFilters(filters: SearchFilters) = withContext(Dispatchers.IO) { indexMutex.withLock {
+    suspend fun prepareAuthorFilters(filters: SearchFilters) = withContext(Dispatchers.IO) {
+        val needsSort = filters.sort in setOf("indexed", "hot") && dao.metadata("index.sort-fields") != "2"
+        val needsAi = filters.ai != "all" && System.currentTimeMillis() - (dao.metadata("creator.ai.checked")?.toLongOrNull() ?: 0) > 86_400_000
+        if (!needsSort && !needsAi) return@withContext
+        indexMutex.withLock {
         if (filters.sort in setOf("indexed", "hot") && dao.metadata("index.sort-fields") != "2") {
-            var offset = 0
-            do {
-                val rows = dao.creatorPage(offset)
-                dao.creators(rows.map { wireJson.decodeFromString<Creator>(it.payload).creatorRow() })
-                offset += rows.size
-            } while (rows.size == 500)
-            dao.metadata(Metadata("index.sort-fields", "2"))
+            // Update the numeric columns in one transaction. Re-encoding/upserting 100k
+            // unchanged creator payloads for a sort selection was needless disk work.
+            db.withTransaction {
+                db.openHelper.writableDatabase.compileStatement("UPDATE creators SET indexed = ?, favorited = ? WHERE `key` = ?").use { statement ->
+                    var offset = 0
+                    do {
+                        val rows = dao.creatorPage(offset)
+                        rows.forEach { row ->
+                            val creator = wireJson.decodeFromString<Creator>(row.payload)
+                            statement.clearBindings(); statement.bindLong(1, timeValue(creator.indexed)); statement.bindLong(2, timeValue(creator.favorited) / 1000); statement.bindString(3, row.key)
+                            statement.executeUpdateDelete()
+                        }
+                        offset += rows.size
+                    } while (rows.size == 500)
+                }
+                dao.metadata(Metadata("index.sort-fields", "2"))
+            }
         }
         if (filters.ai != "all" && System.currentTimeMillis() - (dao.metadata("creator.ai.checked")?.toLongOrNull() ?: 0) > 86_400_000) {
             val tagged = publicClient.newCall(Request.Builder().url("$SITE/api/v1/creators?only=ai").build()).await().requireSuccess().use {
@@ -260,8 +274,23 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         val column = when (filters.sort) { "updated" -> "updated"; "indexed" -> "indexed"; "hot" -> "favorited"; else -> "name COLLATE NOCASE" }
         val direction = if (filters.order == "desc") "DESC" else "ASC"
         args += offset
-        dao.filterCreators(SimpleSQLiteQuery("SELECT * FROM creators WHERE $where ORDER BY $column $direction, name COLLATE NOCASE ASC, `key` ASC LIMIT 50 OFFSET ?", args.toTypedArray())).map { wireJson.decodeFromString(it.payload) }
+        dao.filterCreators(SimpleSQLiteQuery("SELECT * FROM creators WHERE `key` IN (SELECT `key` FROM creators WHERE $where ORDER BY $column $direction, name COLLATE NOCASE ASC, `key` ASC LIMIT 50 OFFSET ?) ORDER BY $column $direction, name COLLATE NOCASE ASC, `key` ASC", args.toTypedArray())).map { wireJson.decodeFromString(it.payload) }
     }
+    suspend fun cachedWorkPage(cache: String): CachedWorkPage? = withContext(Dispatchers.IO) {
+        val cursor = dao.metadata("search.page:$cache")?.let { runCatching { wireJson.decodeFromString<SearchPageCursor>(it) }.getOrNull() } ?: return@withContext null
+        val rows = cachedPosts(cache)
+        if (rows.size != cursor.rawCount) return@withContext null
+        CachedWorkPage(WorkSearchPage(rows, cursor.nextOffset, cursor.more), cursor.checkedAt)
+    }
+    suspend fun storeWorkPage(cache: String, page: WorkSearchPage) = withContext(Dispatchers.IO) { db.withTransaction {
+        val unique = page.rawPosts.distinctBy { it.key }.map { it.compact() }
+        storePosts(cache, unique)
+        // Search relevance/order belongs to the server, not publication timestamps.
+        dao.posts(unique.mapIndexed { index, post -> PostRow(cache, post.key, -index.toLong(), wireJson.encodeToString(post)) })
+        dao.metadata(Metadata("search.page:$cache", wireJson.encodeToString(SearchPageCursor(page.nextOffset, page.more, System.currentTimeMillis(), unique.size))))
+        dao.searchPageMetadata().sortedByDescending { row -> runCatching { wireJson.decodeFromString<SearchPageCursor>(row.value).checkedAt }.getOrDefault(0) }.drop(10).forEach { dao.removeMetadata(it.key) }
+    } }
+
     suspend fun popularPosts(offset: Int): List<Post> = withContext(Dispatchers.IO) {
         val cache = "public:home:popular"
         val checked = dao.metadata("popular.checked")?.toLongOrNull() ?: 0
