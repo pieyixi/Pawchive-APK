@@ -1,0 +1,21 @@
+<resources>
+  <string name="reader_option_advanced">高级</string>
+  <string name="reader_option_cover">封面单独显示</string>
+  <string name="reader_option_horizontal">横向</string>
+  <string name="reader_option_instant_flip">立即翻页</string>
+  <string name="reader_option_layout">布局</string>
+  <string name="reader_option_layout_auto">自动</string>
+  <string name="reader_option_layout_double">双页</string>
+  <string name="reader_option_layout_single">单页</string>
+  <string name="reader_option_orientation">方向</string>
+  <string name="reader_option_padding">页面适应屏幕</string>
+  <string name="reader_option_reverse">反向</string>
+  <string name="reader_option_snap">按页对齐</string>
+  <string name="reader_option_vertical">纵向</string>
+  <string name="reader_options">阅读器选项</string>
+  <string name="reader_page_grid">跳转到某页</string>
+  <string name="reader_preset_default">默认</string>
+  <string name="reader_preset_right_to_left">从右到左</string>
+  <string name="reader_preset_webtoon">条漫</string>
+  <string name="settings_back">返回</string>
+</resources>

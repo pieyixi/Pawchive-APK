@@ -1,0 +1,47 @@
+[
+  {
+    "target": "ReaderBars.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderBars.kt",
+    "sourceSha256": "e4e1ff4f9c38935d1062e4fbfdefeccaefbf4f2d74fc0e5579da7be957caf541"
+  },
+  {
+    "target": "ReaderDialogs.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderDialogs.kt",
+    "sourceSha256": "a62d2da28fe724757e404958f08ffc154bc2bc583fae579d1759acd03865b311"
+  },
+  {
+    "target": "FastScroller.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/FastScroller.kt",
+    "sourceSha256": "593cbdb7ef11d62c79522c337d34fc2c976f62d7beee78c50fdeee505d731e37"
+  },
+  {
+    "target": "VolumePageTurnDispatcher.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/VolumePageTurnDispatcher.kt",
+    "sourceSha256": "0214c1b072869a171ce45fe604b8b3976bc99204f96d0e68d1ab85de84cdd159"
+  },
+  {
+    "target": "ReaderActions.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderActions.kt",
+    "sourceSha256": "3378e056e9765e68f47b81bc584fa1fec078d276f55db987c7523fd08975cbbf"
+  },
+  {
+    "target": "ReaderOptions.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderOptions.kt",
+    "sourceSha256": "ba11a430d51949118ca8dfde5762c6ba016d040f035ee63ac46b1dcbb0e07c7b"
+  },
+  {
+    "target": "ReaderPageGrid.kt",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderPageGrid.kt",
+    "sourceSha256": "c60bee76aee5952b49b99b2e78d87db4be0c437f3aa411c5951bc9c5e8db2bb9"
+  },
+  {
+    "target": "ReaderSpread.kt (immediate tap, double-tap policy and long press copied verbatim)",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderSpread.kt",
+    "sourceSha256": "b94af4ee55bb534acc95d08186b7132ed0614b31b8c09af2208f5702e78cd522"
+  },
+  {
+    "target": "ReaderScreen.kt (page-turn target, chrome, list layout, snapping, neighbour prefetch, sizing and page identity helpers)",
+    "source": "pupil/src/main/java/xyz/quaver/pupil/ui/compose/reader/ReaderScreen.kt",
+    "sourceSha256": "21fcb31af240ff6cf1d1bc94ada4662ab4c1a190aaf8542fba85011908ef964d"
+  }
+]

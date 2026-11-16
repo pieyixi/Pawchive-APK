@@ -1,0 +1,15 @@
+<resources>
+    <style name="Theme.Pawchive" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#EF7B9C</item>
+        <item name="android:windowBackground">#19191D</item>
+    </style>
+    <style name="Theme.Pawchive.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">#EF7B9C</item>
+        <item name="android:windowBackground">#19191D</item>
+    </style>
+</resources>

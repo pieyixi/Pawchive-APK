@@ -1,0 +1,6 @@
+# Manually selected application journeys based on Android 11 system traces.
+# Library baseline profiles remain merged by AGP; no device/user data is included.
+# Startup + main navigation, search, cached pages and settings.
+HSPLpw/pawchive/app/**;->**(**)**
+# Reader entry, immediate touch response, lazy page layout and options.
+HPLpw/pawchive/media/reader/**;->**(**)**
