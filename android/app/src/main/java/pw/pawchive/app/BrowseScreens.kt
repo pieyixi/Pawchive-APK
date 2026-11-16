@@ -48,6 +48,7 @@ import pw.pawchive.media.PreviewImage
 @Composable
 fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) -> Unit, onMine: () -> Unit) {
     val blocked by app.blocked.collectAsStateWithLifecycle()
+    val hideNovels by app.hideSuspectedNovels.collectAsStateWithLifecycle()
     val pager = rememberPagerState(initialPage = 1, pageCount = { 2 })
     val category = pager.currentPage
     val vm: HomeViewModel = viewModel(key = "home-page-$category", factory = vmFactory { HomeViewModel(app.repo, it, category) })
@@ -112,18 +113,35 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             val grid = rememberLazyGridState()
             val pageQuery by pageVm.query.collectAsStateWithLifecycle()
             val pageFilters by pageVm.filters.collectAsStateWithLifecycle()
-            LaunchedEffect(pageQuery, pageFilters) { grid.scrollToItem(0) }
+            // Re-entering this composition after a detail page is not a new search.
+            // Save the criteria alongside the grid so restoration cannot reset its anchor.
+            val encodedFilters = wireJson.encodeToString(pageFilters)
+            var positionedQuery by rememberSaveable { mutableStateOf(pageQuery) }
+            var positionedFilters by rememberSaveable { mutableStateOf(encodedFilters) }
+            LaunchedEffect(pageQuery, encodedFilters) {
+                if (positionedQuery != pageQuery || positionedFilters != encodedFilters) {
+                    grid.scrollToItem(0)
+                    positionedQuery = pageQuery
+                    positionedFilters = encodedFilters
+                }
+            }
             val last by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 } }
             val visibleCreators = state.creators.filter { author -> blocked.none { it.key == author.key } }
             val visiblePosts = state.posts.filter { post -> blocked.none { it.key == post.authorKey } }
+            val currentPosts by rememberUpdatedState(visiblePosts)
+            LaunchedEffect(grid, pageQuery, encodedFilters, hideNovels) {
+                if (page == 1 && hideNovels) snapshotFlow {
+                    grid.layoutInfo.visibleItemsInfo.mapNotNull { currentPosts.getOrNull(it.index) }
+                }.collect { pageVm.inspectVisible(it) }
+            }
             val count = if (page == 0) visibleCreators.size else visiblePosts.size
             val loadedCount = if (page == 0) state.creators.size else state.posts.size
             LaunchedEffect(last, count, loadedCount, state.loading, state.more, state.error) {
-                if (loadedCount > 0 && last >= count - 6 && state.more && !state.loading && state.error == null) pageVm.load(true)
+                if (count > 0 && loadedCount > 0 && last >= count - 6 && state.more && !state.loading && state.error == null) pageVm.load(true)
             }
             LazyVerticalGrid(columns = GridCells.Fixed(2), state = grid, modifier = Modifier.fillMaxSize().background(if (page == 1) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background).testTag("home_grid_$page"), contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (page == 0) items(visibleCreators, key = { it.key }) { author ->
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).clickable { onAuthor(author) }.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(Modifier.fillMaxWidth().testTag("home_author_card").clip(RoundedCornerShape(6.dp)).clickable { onAuthor(author) }.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Avatar(author, Modifier.size(76.dp))
                         Text(author.name, fontSize = 14.sp, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
                         Text(author.service, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))

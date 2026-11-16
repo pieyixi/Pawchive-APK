@@ -9,7 +9,8 @@ data class SearchFilters(
     val range: String = "all", val period: String = "all",
     val start: String = "", val end: String = "", val service: String = "all",
     val media: String = "all", val ai: String = "all",
-    val sort: String = "name", val order: String = "asc"
+    val sort: String = "name", val order: String = "asc",
+    val workOrder: String = "default"
 ) {
     val isDefault get() = this == SearchFilters()
     val validDates get() = runCatching {

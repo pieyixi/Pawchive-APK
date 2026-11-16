@@ -23,3 +23,17 @@ suspend fun loadWorkSearchPage(api: PawApi, query: String, offset: Int, mediaOnl
 @kotlinx.serialization.Serializable
 data class SearchPageCursor(val nextOffset: Int, val more: Boolean, val checkedAt: Long, val rawCount: Int)
 data class CachedWorkPage(val page: WorkSearchPage, val checkedAt: Long)
+
+/** Walk real server pages backwards; a partial oldest page does not mean exhaustion. */
+suspend fun loadAscendingWorkSearchPage(api: PawApi, query: String, offset: Int, mediaOnly: Boolean, filters: SearchFilters): WorkSearchPage {
+    require(offset >= 0 && offset % 50 == 0)
+    val rows = mutableListOf<Post>()
+    var cursor = offset
+    repeat(if (mediaOnly) 3 else 1) {
+        val batch = api.posts(filters.workQuery(query), cursor, hide = "ai".takeIf { filters.ai == "hide" }, only = "ai".takeIf { filters.ai == "only" })
+        rows += batch.reversed()
+        cursor -= 50
+        if (cursor < 0 || !mediaOnly || rows.any { it.hasVisualMedia }) return WorkSearchPage(rows, cursor, cursor >= 0)
+    }
+    return WorkSearchPage(rows, cursor, cursor >= 0)
+}

@@ -27,6 +27,7 @@ class AppViewModel(val repo: PawRepository) : ViewModel() {
     val transfers = repo.dao.downloads().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val hideMediaLessWorks = repo.hideMediaLessWorks.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val hideSuspectedNovels = repo.hideSuspectedNovels.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val feedPulse = MutableStateFlow(0)
     private var feedJob: Job? = null
     private val pendingActions = mutableSetOf<String>()
@@ -66,11 +67,19 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
     private var requestId = 0L
     private var rawPosts = emptyList<Post>()
     private var mediaOnly = false
+    private var hideNovels = false
+    private fun visiblePosts(): List<Post> = rawPosts.visibleWorks(mediaOnly).filterNot {
+        hideNovels && (query.value.isNotBlank() || !filters.value.isDefault) && repo.novelVerdicts.value[it.key] == true
+    }
+    suspend fun inspectVisible(posts: List<Post>) {
+        if (hideNovels && (query.value.isNotBlank() || !filters.value.isDefault)) repo.inspectNovels(posts)
+    }
     init {
         if (initialCategory == 1) viewModelScope.launch {
-            repo.hideMediaLessWorks.collect { enabled ->
+            combine(repo.hideMediaLessWorks, repo.hideSuspectedNovels, repo.novelVerdicts) { media, novels, _ -> media to novels }.collect { (enabled, novels) ->
                 mediaOnly = enabled && (query.value.isNotBlank() || !filters.value.isDefault)
-                state.value = state.value.copy(posts = rawPosts.visibleWorks(mediaOnly))
+                hideNovels = novels
+                state.value = state.value.copy(posts = visiblePosts())
             }
         }
         viewModelScope.launch {
@@ -124,18 +133,18 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
                             rawPosts = cached
                             offset = cachedPage?.page?.nextOffset ?: cached.size
                             val fresh = cachedPage != null && System.currentTimeMillis() - cachedPage.checkedAt in 0L..300_000L && !force
-                            state.value = HomeState(posts = cached.visibleWorks(mediaOnly), loading = !fresh, more = cachedPage?.page?.more ?: true)
+                            state.value = HomeState(posts = visiblePosts(), loading = !fresh, more = cachedPage?.page?.more ?: true)
                             if (fresh) { cacheHit = true; return@launch }
                         } else { rawPosts = emptyList(); state.value = HomeState(loading = true) }
                         // Expired cache is a display fallback, not the next network offset.
                         offset = 0
                     }
                     val batch = if (popular) repo.popularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) }
-                        else withTimeoutOrNull(20_000) { loadWorkSearchPage(repo.api, q, offset, mediaOnly, options) } ?: throw java.io.IOException("网站响应较慢，请重试")
+                        else withTimeoutOrNull(20_000) { repo.searchWorkPage(q, offset, mediaOnly, options, !append) } ?: throw java.io.IOException("网站响应较慢，请重试")
                     if (token == requestId) {
                         if (!append && !popular) repo.storeWorkPage(cache, batch)
                         rawPosts = (if (append) (rawPosts + batch.rawPosts).distinctBy { it.key } else batch.rawPosts).distinctBy { it.key }.map { it.compact() }
-                        state.value = HomeState(posts = rawPosts.visibleWorks(mediaOnly), more = batch.more); offset = batch.nextOffset
+                        state.value = HomeState(posts = visiblePosts(), more = batch.more); offset = batch.nextOffset
                     }
                 }
             } catch (e: Exception) { if (e is CancellationException) throw e; if (token == requestId) state.value = state.value.copy(loading = false, error = e.message ?: "加载失败") }

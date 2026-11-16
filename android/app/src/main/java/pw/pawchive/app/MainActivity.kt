@@ -23,6 +23,7 @@ class AppContainer(context: Application) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     internal val navigationIcons = NavigationIconCache(context, scope)
     val repository = PawRepository(context, scope)
+    internal val updater = AppUpdater(context, scope, repository.publicClient)
     val downloads = DownloadCoordinator(context, repository)
     init {
         TransferRuntime.repository = repository; installImageLoader(context)

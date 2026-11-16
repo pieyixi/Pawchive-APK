@@ -58,6 +58,7 @@ fun AdvancedSearchPanel(author: Boolean, filters: SearchFilters, panelWidth: Dp,
                         }
                         FilterGroup("排列顺序", "order", draft.order, listOf("asc" to "升序", "desc" to "降序")) { update(draft.copy(order = it)) }
                     } else {
+                        FilterGroup("网站收录顺序", "work_order", draft.workOrder, listOf("default" to "默认", "desc" to "降序", "asc" to "升序")) { update(draft.copy(workOrder = it)) }
                         FilterGroup("搜索范围", "range", draft.range, listOf("all" to "标题和正文", "title" to "仅标题")) { update(draft.copy(range = it)) }
                         FilterGroup("发布时间", "period", draft.period, listOf("all" to "不限", "day" to "最近一天", "week" to "最近一周", "half" to "最近半年")) { update(draft.period(it)) }
                         Row(Modifier.fillMaxWidth().padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {

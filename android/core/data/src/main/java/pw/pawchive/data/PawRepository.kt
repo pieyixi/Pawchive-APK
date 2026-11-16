@@ -21,6 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.room.migration.Migration
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
 import java.util.concurrent.atomic.AtomicLong
@@ -58,6 +59,28 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
     val dark: Flow<Boolean?> = context.preferences.data.map { it[booleanPreferencesKey("dark")] }
     val hideMediaLessWorks: Flow<Boolean> = context.preferences.data.map { it[booleanPreferencesKey("hide_media_less_works")] ?: false }.distinctUntilChanged()
     suspend fun setHideMediaLessWorks(value: Boolean) { context.preferences.edit { it[booleanPreferencesKey("hide_media_less_works")] = value } }
+    val hideSuspectedNovels: Flow<Boolean> = context.preferences.data.map { it[booleanPreferencesKey("hide_suspected_novels")] ?: false }.distinctUntilChanged()
+    suspend fun setHideSuspectedNovels(value: Boolean) { context.preferences.edit { it[booleanPreferencesKey("hide_suspected_novels")] = value } }
+    val novelVerdicts = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    private val novelGate = Semaphore(2)
+    suspend fun inspectNovels(posts: List<Post>) = coroutineScope {
+        posts.filter { it.novelCandidate }.distinctBy { it.key }.map { post -> async(Dispatchers.IO) {
+            novelGate.withPermit {
+                val revision = post.edited?.toString().orEmpty() + ":" + post.published?.toString().orEmpty()
+                val key = "novel.v1:${post.key}"
+                val cached = dao.metadata(key)?.let { runCatching { wireJson.decodeFromString<NovelVerdict>(it) }.getOrNull() }
+                val result = cached?.takeIf { it.revision == revision && System.currentTimeMillis() - it.checkedAt in 0..604_800_000L }
+                    ?: runCatching {
+                        val full = withTimeoutOrNull(12_000) { api.post(post.service, post.user, post.id) } ?: return@withPermit
+                        NovelVerdict(full.isSuspectedNovel(), System.currentTimeMillis(), revision).also {
+                            dao.metadata(Metadata(key, wireJson.encodeToString(it)))
+                        }
+                    }.getOrElse { if (it is CancellationException) throw it; return@withPermit }
+                novelVerdicts.update { (it + (post.key to result.suspect)).entries.toList().takeLast(512).associate { row -> row.toPair() } }
+            }
+        } }.awaitAll()
+        dao.novelVerdictMetadata().sortedByDescending { runCatching { wireJson.decodeFromString<NovelVerdict>(it.value).checkedAt }.getOrDefault(0) }.drop(1000).forEach { dao.removeMetadata(it.key) }
+    }
     val readerSettings: Flow<ReaderSettings> = context.preferences.data.map {
         it[stringPreferencesKey("reader_options")]?.let { raw -> runCatching { wireJson.decodeFromString<ReaderSettings>(raw) }.getOrNull() } ?: ReaderSettings()
     }.flowOn(Dispatchers.Default)
@@ -290,6 +313,22 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         dao.metadata(Metadata("search.page:$cache", wireJson.encodeToString(SearchPageCursor(page.nextOffset, page.more, System.currentTimeMillis(), unique.size))))
         dao.searchPageMetadata().sortedByDescending { row -> runCatching { wireJson.decodeFromString<SearchPageCursor>(row.value).checkedAt }.getOrDefault(0) }.drop(10).forEach { dao.removeMetadata(it.key) }
     } }
+
+    suspend fun searchWorkPage(query: String, offset: Int, mediaOnly: Boolean, filters: SearchFilters, firstPage: Boolean): WorkSearchPage = withContext(Dispatchers.IO) {
+        if (filters.workOrder != "asc") return@withContext loadWorkSearchPage(api, query, offset, mediaOnly, filters)
+        val start = if (!firstPage) offset else {
+            val url = SITE.toHttpUrl().newBuilder().addPathSegment("posts").addQueryParameter("q", filters.workQuery(query))
+            if (filters.ai == "hide") url.addQueryParameter("hide", "ai")
+            if (filters.ai == "only") url.addQueryParameter("only", "ai")
+            val html = publicClient.newCall(Request.Builder().url(url.build()).build()).await().requireSuccess().use { it.body!!.string() }
+            val text = Jsoup.parse(html).text()
+            val total = Regex("Showing\\s+[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.replace(",", "")?.toIntOrNull()
+                ?: if (Regex("No posts|No results", RegexOption.IGNORE_CASE).containsMatchIn(text)) 0 else throw IOException("网站暂未提供结果总数，无法全局升序，请重试")
+            if (total == 0) return@withContext WorkSearchPage(emptyList(), -50, false)
+            (total - 1) / 50 * 50
+        }
+        loadAscendingWorkSearchPage(api, query, start, mediaOnly, filters)
+    }
 
     suspend fun popularPosts(offset: Int): List<Post> = withContext(Dispatchers.IO) {
         val cache = "public:home:popular"

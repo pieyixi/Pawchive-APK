@@ -126,8 +126,10 @@ fun LoginScreen(app: AppViewModel, back: () -> Unit) {
 fun SettingsScreen(app: AppViewModel, dark: Boolean, toggle: () -> Unit, back: () -> Unit) {
     val account by app.account.collectAsStateWithLifecycle()
     val hideMediaLess by app.hideMediaLessWorks.collectAsStateWithLifecycle()
+    val hideNovels by app.hideSuspectedNovels.collectAsStateWithLifecycle()
     var logoutDialog by remember { mutableStateOf(false) }
     Page("设置", back) {
+        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("深色主题", modifier = Modifier.weight(1f)); Switch(dark, { toggle() }, Modifier.testTag("settings_dark_switch").semantics { contentDescription = "深色主题" })
         }
@@ -138,8 +140,17 @@ fun SettingsScreen(app: AppViewModel, dark: Boolean, toggle: () -> Unit, back: (
             }
             Switch(hideMediaLess, { enabled -> app.action { app.repo.setHideMediaLessWorks(enabled) } }, Modifier.testTag("settings_media_switch").semantics { contentDescription = "过滤无图片和视频的作品" })
         }
+        Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("屏蔽疑似小说")
+                Text("仅作品搜索；根据少图、长正文等特征判断", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+            Switch(hideNovels, { enabled -> app.action { app.repo.setHideSuspectedNovels(enabled) } }, Modifier.testTag("settings_novel_switch").semantics { contentDescription = "屏蔽疑似小说" })
+        }
         Row(Modifier.fillMaxWidth().padding(20.dp)) { Text("版本", modifier = Modifier.weight(1f)); Text(BuildConfig.VERSION_NAME) }
+        UpdateSetting()
         if (account.username != null) TextButton(onClick = { logoutDialog = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("退出登录") }
+        }
     }
     if (logoutDialog) AlertDialog(onDismissRequest = { logoutDialog = false }, title = { Text("退出登录？") }, text = { Text("此设备上的登录会话将被清除。") }, confirmButton = { TextButton(onClick = { logoutDialog = false; app.action { app.repo.logout() } }) { Text("退出") } }, dismissButton = { TextButton(onClick = { logoutDialog = false }) { Text("取消") } })
 }
