@@ -128,6 +128,7 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     val latestBack by rememberUpdatedState<() -> Unit>({ back() })
     val latestSave by rememberUpdatedState(save)
     val latestDark by rememberUpdatedState(dark)
+    val latestHome by rememberUpdatedState<() -> Unit>({ tab=0;homeStack.clear();homeStack.add(HomeKey) })
     val selectTab: (Int) -> Unit = remember(focus) { { next -> focus.clearFocus(); tab = next } }
     // NavEntry equality includes the content lambda identity. Keep the provider stable so
     // recomposition cannot overwrite NavDisplay's pop decision with an unchanged stack.
@@ -144,9 +145,9 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
                 val vm: DetailViewModel = viewModel(factory = vmFactory { DetailViewModel(repo, key.service, key.user, key.post) })
                 DetailScreen(vm, app, { latestBack() }, { latestOpen(AuthorKey(key.service, key.user)) },
                     { context.startActivity(ReaderActivity.intent(context, key.service, key.user, key.post, it)) },
-                    { latestOpen(VideoKey(key.service, key.user, key.post, it)) }, { latestOpen(FilesKey(key.service, key.user, key.post)) })
+                    { latestOpen(VideoKey(key.service, key.user, key.post, it)) }, { latestOpen(FilesKey(key.service, key.user, key.post)) }, { latestHome() })
             }
-            entry<VideoKey> { key -> MediaDestination(repo, key.service, key.user, key.post) { post -> post.videos.getOrNull(key.page)?.let { VideoPage(it) { latestBack() } } } }
+            entry<VideoKey> { key -> MediaDestination(repo, key.service, key.user, key.post) { post -> post.videos.getOrNull(key.page)?.let { file -> ReferenceVideo(file,post.title,{latestBack()},{latestHome()},Modifier.fillMaxSize(),onLater={app.later(post)},onDownload={latestOpen(FilesKey(key.service,key.user,key.post))}) } } }
             entry<FilesKey> { key -> Page("下载文件", { latestBack() }) { MediaDestination(repo, key.service, key.user, key.post) { FilesScreen(it, latestSave) } } }
             entry<CollectionKey> { key -> CollectionScreen(key.kind, app, { latestBack() }, { latestOpen(AuthorKey(it.service, it.id)) }, { latestOpen(PostKey(it.service, it.user, it.id)) }) }
             entry<TransfersKey> { TransferScreen(app, container.downloads, { latestBack() }) }

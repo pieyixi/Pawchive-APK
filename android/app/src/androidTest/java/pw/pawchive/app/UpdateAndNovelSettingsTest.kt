@@ -61,13 +61,13 @@ class UpdateAndNovelSettingsTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val body = when {
-                chain.request().url.host == "api.github.com" -> release("0.1.11").toByteArray()
-                chain.request().url.encodedPath.endsWith("SHA256SUMS.txt") -> "$digest  Pawchive-0.1.11.apk".toByteArray()
+                chain.request().url.host == "api.github.com" -> release("0.1.12").toByteArray()
+                chain.request().url.encodedPath.endsWith("SHA256SUMS.txt") -> "$digest  Pawchive-0.1.12.apk".toByteArray()
                 else -> bytes
             }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody("application/octet-stream".toMediaType())).build()
         }.build()
-        val finalFile = java.io.File(application.cacheDir, "updates/Pawchive-0.1.11.apk")
+        val finalFile = java.io.File(application.cacheDir, "updates/Pawchive-0.1.12.apk")
         try {
             val updater = AppUpdater(application, scope, client)
             updater.check(); withTimeout(10000) { updater.state.first { !it.busy } }
@@ -108,6 +108,7 @@ class UpdateAndNovelSettingsTest {
         val second = withTimeout(20000) { repo.searchWorkPage("JK", first.nextOffset, false, filters, false) }
         assertTrue(first.rawPosts.none { a -> second.rawPosts.any { a.key == it.key } })
         assertEquals(first.nextOffset - 50, second.nextOffset)
+        compose.onNodeWithText("作品").performClick()
         compose.onNode(hasSetTextAction()).performTextReplacement("JK")
         compose.onNodeWithContentDescription("高级搜索").performClick()
         compose.onNodeWithTag("filter_media_video").performClick()

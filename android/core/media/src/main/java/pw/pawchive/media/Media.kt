@@ -45,11 +45,16 @@ fun installImageLoader(context: Context) {
 }
 
 @Composable
-fun PreviewImage(file: RemoteFile?, modifier: Modifier = Modifier, description: String? = null, scale: ContentScale = ContentScale.Fit) {
+fun PreviewImage(file: RemoteFile?, modifier: Modifier = Modifier, description: String? = null, scale: ContentScale = ContentScale.Fit, background: Color = MaterialTheme.colorScheme.background, onBitmap: (android.graphics.Bitmap)->Unit = {}) {
     var failed by remember(file?.path) { mutableStateOf(false) }
-    Box(modifier.background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
-        if (file == null || failed) Text(if (file == null) "暂无封面" else "预览暂不可用", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-        if (file != null) AsyncImage(model = file.thumbnail, contentDescription = description, modifier = Modifier.fillMaxSize(), contentScale = scale, onError = { failed = true }, onSuccess = { failed = false })
+    val context = LocalContext.current
+    val frame by produceState<java.io.File?>(null, file?.path, failed) {
+        if (failed && file?.isVideo == true) value = firstVideoFrame(context.applicationContext, file)
+    }
+    Box(modifier.background(background), contentAlignment = Alignment.Center) {
+        if (file == null || failed && frame == null) Text(if (file == null) "暂无封面" else if (file.isVideo) "视频" else "预览暂不可用", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        if (frame != null) AsyncImage(model = frame, contentDescription = description, modifier = Modifier.fillMaxSize(), contentScale = scale,onSuccess={(it.result.image as? coil3.BitmapImage)?.bitmap?.let(onBitmap)})
+        else if (file != null) AsyncImage(model = file.thumbnail, contentDescription = description, modifier = Modifier.fillMaxSize(), contentScale = scale, onError = { failed = true }, onSuccess = { failed = false;(it.result.image as? coil3.BitmapImage)?.bitmap?.let(onBitmap) })
     }
 }
 

@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
@@ -28,7 +30,7 @@ import kotlin.math.roundToInt
 
 /** Tab clicks and direct drags share a pager; the underline follows finger progress. */
 @Composable
-fun PagerTabStrip(labels: List<String>, pager: PagerState, tabWidth: Dp = 88.dp, beforeChange: () -> Unit = {}) {
+fun PagerTabStrip(labels: List<String>, pager: PagerState, tabWidth: Dp = 88.dp, beforeChange: () -> Unit = {}, onTabBounds: (Int, androidx.compose.ui.geometry.Rect) -> Unit = {_,_->}) {
     val scope = rememberCoroutineScope()
     Box(Modifier.width(tabWidth * labels.size).height(51.dp)) {
         Row {
@@ -37,7 +39,7 @@ fun PagerTabStrip(labels: List<String>, pager: PagerState, tabWidth: Dp = 88.dp,
                     onClick = { beforeChange(); scope.launch { pager.animateScrollToPage(page) } },
                     modifier = Modifier.width(tabWidth).height(48.dp),
                     selectedContentColor = Pink, unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    text = { Text(label) })
+                    text = { Text(label,modifier=Modifier.onGloballyPositioned {onTabBounds(page,it.boundsInRoot())}) })
             }
         }
         Box(Modifier.align(Alignment.BottomStart).offset {
