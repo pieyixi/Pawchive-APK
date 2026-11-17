@@ -29,6 +29,7 @@ class AppViewModel(val repo: PawRepository) : ViewModel() {
     val hideMediaLessWorks = repo.hideMediaLessWorks.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val hideSuspectedNovels = repo.hideSuspectedNovels.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val feedPulse = MutableStateFlow(0)
+    val scrollToTop = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     private var feedJob: Job? = null
     private val pendingActions = mutableSetOf<String>()
     init {

@@ -129,7 +129,10 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     val latestSave by rememberUpdatedState(save)
     val latestDark by rememberUpdatedState(dark)
     val latestHome by rememberUpdatedState<() -> Unit>({ tab=0;homeStack.clear();homeStack.add(HomeKey) })
-    val selectTab: (Int) -> Unit = remember(focus) { { next -> focus.clearFocus(); tab = next } }
+    val selectTab: (Int) -> Unit = remember(focus, app) { { next ->
+        focus.clearFocus()
+        if (next == tab && next < 2) app.scrollToTop.tryEmit(next) else tab = next
+    } }
     // NavEntry equality includes the content lambda identity. Keep the provider stable so
     // recomposition cannot overwrite NavDisplay's pop decision with an unchanged stack.
     val provider = remember(app, container, context) {
@@ -207,7 +210,8 @@ private fun BottomTabs(selected: Int, images: NavigationBitmaps?, onSelect: (Int
             listOf("首页", "动态", "我的").forEachIndexed { i, label ->
                 val bitmap = images?.let { when(i) { 0 -> it.home; 1 -> it.feed; else -> if (selected == 2) it.selectedMine else it.mine } }
                 val tint = if (selected == i) Pink else MaterialTheme.colorScheme.onSurfaceVariant
-                Column(Modifier.weight(1f).fillMaxHeight().selectable(selected = selected == i, role = Role.Tab, onClick = { onSelect(i) }),
+                Column(Modifier.weight(1f).fillMaxHeight().testTag("bottom_tab_$i").selectable(selected = selected == i, role = Role.Tab,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = { onSelect(i) }),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
                     Spacer(Modifier.height(2.5.dp))
                     Box(Modifier.size(ReferenceMetrics.BottomIconViewport).testTag("nav_icon_$i")) { bitmap?.let {

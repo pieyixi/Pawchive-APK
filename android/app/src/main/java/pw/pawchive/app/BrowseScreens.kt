@@ -42,6 +42,7 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.collectLatest
 import pw.pawchive.data.*
 import pw.pawchive.media.PreviewImage
 
@@ -111,6 +112,11 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             val state by pageVm.state.collectAsStateWithLifecycle()
             ReportDrawnWhen { page != pager.currentPage || !state.loading || state.creators.isNotEmpty() || state.posts.isNotEmpty() }
             val grid = rememberLazyGridState()
+            LaunchedEffect(app, grid, pager) {
+                app.scrollToTop.filter { it == 0 }.collectLatest {
+                    if (pager.currentPage == page) { filtering = false; grid.animateScrollToItem(0) }
+                }
+            }
             val pageQuery by pageVm.query.collectAsStateWithLifecycle()
             val pageFilters by pageVm.filters.collectAsStateWithLifecycle()
             // Re-entering this composition after a detail page is not a new search.
@@ -208,9 +214,8 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     val posts = remember(rawPosts, blocked) { rawPosts.filter { post -> blocked.none { it.key == post.authorKey } } }
     val follows by app.follows.collectAsStateWithLifecycle()
     val status by app.repo.feedStatus.collectAsStateWithLifecycle()
-    val pulse by app.feedPulse.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
-    LaunchedEffect(pulse) { if (pulse > 0) list.animateScrollToItem(0) }
+    LaunchedEffect(app, list) { app.scrollToTop.filter { it == 1 }.collectLatest { list.animateScrollToItem(0) } }
     val refresh = rememberPullToRefreshState()
     val ordered = remember(follows, posts, blocked) {
         val times = posts.groupBy { it.authorKey }.mapValues { (_, p) -> p.maxOf { it.feedTimestamp } }
@@ -228,7 +233,7 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                 CircularProgressIndicator(Modifier.size(26.dp), color = Pink, trackColor = androidx.compose.ui.graphics.Color.Transparent, strokeWidth = 2.5.dp)
             }
         }) {
-            LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
+            LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("feed_list")) {
                 item(key = "heading") { Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("最近更新", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     if (status.running && status.total > 0) Text("${status.checked}/${status.total}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

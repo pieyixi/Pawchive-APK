@@ -8,20 +8,19 @@ import android.view.TextureView
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
@@ -60,9 +59,9 @@ private fun time(ms: Long): String { val s = ms.coerceAtLeast(0) / 1000; return 
         }
     }
 }
-@Composable private fun GlyphButton(kind: String,label: String, action: () -> Unit) {
+@Composable private fun GlyphButton(kind: String,label: String, modifier: Modifier = Modifier, action: () -> Unit) {
     val ink=when(kind) { "back" -> 20.25.dp; "home" -> 20.8.dp; "pause" -> 23.dp; "full","exit" -> 16.dp; "more" -> 18.dp; else -> 22.dp }
-    Box(Modifier.size(48.dp).semanticsLabel(label).clickable(interactionSource=remember { androidx.compose.foundation.interaction.MutableInteractionSource() },indication=null,onClick=action),contentAlignment=Alignment.Center) { VideoGlyph(kind,Modifier.size(ink)) }
+    Box(modifier.size(48.dp).semanticsLabel(label).clickable(interactionSource=remember { androidx.compose.foundation.interaction.MutableInteractionSource() },indication=null,onClick=action),contentAlignment=Alignment.Center) { VideoGlyph(kind,Modifier.size(ink)) }
 }
 private fun Modifier.semanticsLabel(label: String) = this.then(Modifier.semantics { contentDescription = label })
 
@@ -98,6 +97,26 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     var duration by remember { mutableLongStateOf(0) }
     var buffered by remember { mutableLongStateOf(0) }
     var buffering by remember { mutableStateOf(false) }
+    var seekPreview by remember { mutableStateOf<Long?>(null) }
+    var resumeAfterSeek by remember { mutableStateOf(false) }
+    fun beginSeek(): Long? {
+        if (!requested || duration <= 0 || suspended) return null
+        if (seekPreview == null) {
+            resumeAfterSeek = player.playWhenReady
+            player.pause()
+            seekPreview = player.currentPosition.coerceIn(0, duration)
+            controls = true; interaction++
+        }
+        return seekPreview
+    }
+    fun previewSeek(target: Long) { if (seekPreview != null) seekPreview = target.coerceIn(0, duration) }
+    fun endSeek(commit: Boolean) {
+        val target = seekPreview ?: return
+        seekPreview = null
+        if (commit) { player.seekTo(target); position = target }
+        if (resumeAfterSeek && !suspended && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) player.play()
+        resumeAfterSeek = false; controls = true; interaction++
+    }
     var firstFrame by remember(file.path) { mutableStateOf(false) }
     DisposableEffect(player,lifecycle) {
         val listener=object: Player.Listener {
@@ -105,14 +124,14 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
             override fun onPlayerError(e: PlaybackException) { error="播放失败，请重试";controls=true }
         }
         player.addListener(listener)
-        val observer=LifecycleEventObserver { _,event -> if(event==Lifecycle.Event.ON_STOP) { position=player.currentPosition;player.pause() } }
+        val observer=LifecycleEventObserver { _,event -> if(event==Lifecycle.Event.ON_STOP) { resumeAfterSeek=false;seekPreview=null;position=player.currentPosition;player.pause() } }
         lifecycle.addObserver(observer)
         onDispose { position=player.currentPosition;lifecycle.removeObserver(observer);player.removeListener(listener);player.release() }
     }
     LaunchedEffect(requested) { onPlaybackRequested(requested);if(requested) { player.setMediaItem(MediaItem.fromUri(mediaUri));player.seekTo(position);player.prepare();player.play() } }
-    LaunchedEffect(suspended) { if(suspended) player.pause() }
+    LaunchedEffect(suspended) { if(suspended) {resumeAfterSeek=false;seekPreview=null;player.pause()} }
     LaunchedEffect(player) { while(true) { position=player.currentPosition;duration=player.duration.coerceAtLeast(0);buffered=player.bufferedPosition;playing=player.isPlaying;buffering=player.playbackState==Player.STATE_BUFFERING;delay(200) } }
-    LaunchedEffect(controls,playing,interaction,panel) { if(controls && playing && panel==null) { delay(3500);controls=false } }
+    LaunchedEffect(controls,playing,interaction,panel,seekPreview!=null) { if(controls && playing && panel==null && seekPreview==null) { delay(3500);controls=false } }
     DisposableEffect(playing) { if(playing) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } }
     DisposableEffect(full) {
         activity?.requestedOrientation=if(full) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -120,7 +139,12 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     }
     BackHandler(full) { leaveFullscreen();controls=true }
     val content=remember { movableContentOf {
-        Box(Modifier.fillMaxSize().background(Color.Black).testTag("video_surface").pointerInput(Unit) { detectTapGestures(onTap={controls=!controls;interaction++}) }) {
+        Box(Modifier.fillMaxSize().background(Color.Black).testTag("video_surface")
+            .videoScrubInput(requested && duration>0 && panel==null, onStart={beginSeek()}, duration={duration},
+                onPreview={previewSeek(it)}, onFinish={endSeek(true)}, onCancel={endSeek(false)}, onTap={controls=!controls;interaction++})) {
+            val scrubbing = seekPreview != null
+            val shownPosition = seekPreview ?: position
+            val quiet = Modifier.graphicsLayer { alpha = if(scrubbing) 0f else 1f }
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val ratio=if(player.videoSize.width>0 && player.videoSize.height>0) player.videoSize.width.toFloat()/player.videoSize.height else 16f/9f
                 val w=minOf(maxWidth,maxHeight*ratio)
@@ -131,23 +155,34 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                 else PreviewImage(file,Modifier.fillMaxSize(),background=Color.Black)
             }
             if(!requested) Box(Modifier.size(72.dp).align(Alignment.Center).background(Color.Black.copy(alpha=.35f),androidx.compose.foundation.shape.CircleShape).semanticsLabel("开始播放").clickable { requested=true;interaction++ },contentAlignment=Alignment.Center) { VideoGlyph("play",Modifier.size(32.dp)) }
-            if(buffering) CircularProgressIndicator(Modifier.size(28.dp).align(Alignment.Center),color=VideoPink,strokeWidth=2.dp)
+            if(buffering && !scrubbing) CircularProgressIndicator(Modifier.size(28.dp).align(Alignment.Center),color=VideoPink,strokeWidth=2.dp)
             if(controls) {
                 Box(Modifier.fillMaxWidth().height(72.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent))))
-                Row(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(top=4.dp),verticalAlignment=Alignment.CenterVertically) {
+                Row(quiet.align(Alignment.TopStart).fillMaxWidth().padding(top=4.dp),verticalAlignment=Alignment.CenterVertically) {
                     GlyphButton("back","返回") { if(full) leaveFullscreen() else if(!requested) onPreviewBack() else onBack() }
                     if(full) Text(title,Modifier.weight(1f),color=Color.White,fontSize=14.sp,maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     if(!full) Spacer(Modifier.weight(1f))
                     GlyphButton("more","播放设置") { panel="more";interaction++ }
                 }
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.65f))))) {
-                    if(full) { Text("${time(position)}/${time(duration)}",Modifier.padding(start=20.dp),color=Color.White,fontSize=12.sp,fontFamily=TimeFont); VideoSeek(position,duration,buffered) { player.seekTo(it);position=it;interaction++ } }
-                    Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
-                        GlyphButton(if(playing) "pause" else "play",if(playing) "暂停" else "播放") { if(!requested) requested=true else if(player.isPlaying) player.pause() else { if(player.playbackState==Player.STATE_ENDED) player.seekTo(0);player.play() };interaction++ }
-                        if(!full) { VideoSeek(position,duration,buffered,Modifier.weight(1f).padding(horizontal=8.dp)) { player.seekTo(it);position=it;interaction++ }; Text("${time(position)}/${time(duration)}",Modifier.padding(horizontal=4.dp),color=Color.White,fontSize=11.sp,maxLines=1,fontFamily=TimeFont) }
-                        else { Spacer(Modifier.weight(1f));TextButton(onClick={panel="speed";interaction++}) { Text(if(speed==1f) "倍速" else "${speed}X",color=Color.White) } }
-                        GlyphButton(if(full) "exit" else "full",if(full) "退出全屏" else "全屏") { if(full) leaveFullscreen() else full=true;controls=true;interaction++ }
+                    if(full) {
+                        Text("${time(shownPosition)}/${time(duration)}",quiet.padding(start=20.dp),color=Color.White,fontSize=12.sp,fontFamily=TimeFont)
+                        VideoSeek(shownPosition,duration,buffered,onStart={beginSeek()},onPreview={previewSeek(it)},onFinish={endSeek(true)},onCancel={endSeek(false)})
                     }
+                    Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
+                        GlyphButton(if(playing) "pause" else "play",if(playing) "暂停" else "播放", quiet) {
+                            if(!requested) requested=true else if(player.isPlaying) player.pause() else { if(player.playbackState==Player.STATE_ENDED) player.seekTo(0);player.play() };interaction++
+                        }
+                        if(!full) { VideoSeek(shownPosition,duration,buffered,Modifier.weight(1f).padding(horizontal=8.dp),onStart={beginSeek()},onPreview={previewSeek(it)},onFinish={endSeek(true)},onCancel={endSeek(false)}); Text("${time(shownPosition)}/${time(duration)}",quiet.padding(horizontal=4.dp),color=Color.White,fontSize=11.sp,maxLines=1,fontFamily=TimeFont) }
+                        else { Spacer(Modifier.weight(1f));TextButton(modifier=quiet,onClick={panel="speed";interaction++}) { Text(if(speed==1f) "倍速" else "${speed}X",color=Color.White) } }
+                        GlyphButton(if(full) "exit" else "full",if(full) "退出全屏" else "全屏", quiet) { if(full) leaveFullscreen() else full=true;controls=true;interaction++ }
+                    }
+                }
+            }
+            if(scrubbing) {
+                Row(Modifier.align(Alignment.Center).offset(y=if(full) 80.dp else 40.dp).testTag("video_seek_preview"),verticalAlignment=Alignment.CenterVertically) {
+                    Text(time(shownPosition),color=Color.White,fontSize=14.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,fontFamily=TimeFont)
+                    Text(" / ${time(duration)}",color=Color(0xFFB8B8B8),fontSize=14.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,fontFamily=TimeFont)
                 }
             }
             error?.let { message -> Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.8f)).padding(12.dp)) { Text(message,color=Color.White);TextButton(onClick={error=null;player.prepare();player.play()}) {Text("重试")} } }
@@ -172,12 +207,18 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     }
 }
 
-@Composable private fun VideoSeek(position: Long,duration: Long,buffered: Long,modifier: Modifier=Modifier,onSeek:(Long)->Unit) {
-    var drag by remember { mutableStateOf<Float?>(null) }
-    var width by remember { mutableFloatStateOf(1f) }
-    fun fraction(x: Float)=(x/width).coerceIn(0f,1f)
-    Canvas(modifier.fillMaxWidth().height(32.dp).onSizeChanged {width=it.width.toFloat()}.testTag("video_seek").pointerInput(duration) { detectTapGestures { if(duration>0) onSeek((fraction(it.x)*duration).toLong()) } }.pointerInput(duration) { detectDragGestures(onDragStart={drag=fraction(it.x)},onDragCancel={drag=null},onDragEnd={drag?.let { if(duration>0) onSeek((it*duration).toLong()) };drag=null}) { change,_ -> change.consume();drag=fraction(change.position.x) } }) {
-        val progress=drag ?: if(duration>0) position.toFloat()/duration else 0f
+@Composable private fun VideoSeek(position: Long,duration: Long,buffered: Long,modifier: Modifier=Modifier,
+    onStart:()->Long?,onPreview:(Long)->Unit,onFinish:()->Unit,onCancel:()->Unit) {
+    Canvas(modifier.fillMaxWidth().height(48.dp).testTag("video_seek")
+        .semantics {
+            contentDescription="播放进度"
+            progressBarRangeInfo=ProgressBarRangeInfo(position.toFloat(),0f..duration.coerceAtLeast(1).toFloat())
+            setProgress { value ->
+                if(onStart()!=null) {onPreview(value.toLong());onFinish();true} else false
+            }
+        }
+        .videoScrubInput(duration>0,track=true,onStart=onStart,duration={duration},onPreview=onPreview,onFinish=onFinish,onCancel=onCancel)) {
+        val progress=if(duration>0) position.toFloat()/duration else 0f
         val y=center.y;val thickness=2.dp.toPx()
         drawLine(Color.White.copy(alpha=.3f),Offset(0f,y),Offset(size.width,y),thickness)
         drawLine(Color.White.copy(alpha=.45f),Offset(0f,y),Offset(size.width*(if(duration>0) buffered.toFloat()/duration else 0f).coerceIn(0f,1f),y),thickness)
@@ -188,6 +229,3 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
         for(dx in listOf(-2f,2f)) drawLine(Color.Black,Offset(size.width*progress+dx.dp.toPx(),y-1.5f.dp.toPx()),Offset(size.width*progress+dx.dp.toPx(),y+1.5f.dp.toPx()),1.5f.dp.toPx(),StrokeCap.Round)
     }
 }
-
-
-

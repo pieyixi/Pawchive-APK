@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
@@ -84,7 +85,17 @@ class VideoPlayerDeviceTest {
         val context=object: android.content.ContextWrapper(activity) {override fun getNoBackupFilesDir()=vault}
         val db=androidx.room.Room.inMemoryDatabaseBuilder(context,PawDatabase::class.java).build()
         val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.IO)
-        val post=Post("42","qa","qa",title="Video fixture",content="<p>Original description</p>",file=RemoteFile("cover.png","/cover.png"),attachments=listOf(RemoteFile("clip.mp4","/clip.mp4")))
+        val videos=(1..3).map {RemoteFile("clip$it.mp4","/thumbnail-fixture-$it.mp4")}
+        val frameFiles=videos.mapIndexed { index,file ->
+            val hash=java.security.MessageDigest.getInstance("SHA-256").digest(file.original.toByteArray()).joinToString("") {"%02x".format(it)}
+            File(activity.cacheDir,"video-frames/$hash.jpg").apply {
+                parentFile!!.mkdirs()
+                val bitmap=android.graphics.Bitmap.createBitmap(240,135,android.graphics.Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(listOf(android.graphics.Color.rgb(210,30,30),android.graphics.Color.rgb(30,210,30),android.graphics.Color.rgb(30,30,210))[index])
+                outputStream().use {bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,95,it)};bitmap.recycle()
+            }
+        }
+        val post=Post("42","qa","qa",title="Video fixture",content="<p>Original description</p>",file=RemoteFile("cover.png","/cover.png"),attachments=videos)
         val client=okhttp3.OkHttpClient.Builder().addInterceptor {chain ->
             val body=if(chain.request().url.encodedPath.contains("/post/")) wireJson.encodeToString(post) else wireJson.encodeToString(Creator("qa","qa","Fixture author"))
             okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
@@ -101,12 +112,34 @@ class VideoPlayerDeviceTest {
             val before=compose.onNodeWithText("Video fixture").fetchSemanticsNode().boundsInRoot
             val tabTop=videoTab().fetchSemanticsNode().boundsInRoot.top
             compose.onNodeWithTag("detail_media_pager").performTouchInput {swipeLeft()}
+            fun tileColor(index:Int):androidx.compose.ui.graphics.Color {
+                val image=compose.onNodeWithContentDescription("视频 ${index+1}").captureToImage()
+                return image.toPixelMap()[image.width/4,image.height/2]
+            }
+            compose.waitUntil(15000) {runCatching {tileColor(0).let {it.red>.6f && it.green<.3f}}.getOrDefault(false)}
+            val colors=(0..2).map(::tileColor)
+            compose.mainClock.autoAdvance=false
             compose.onNodeWithTag("detail_media_grid_1").onChildren().onFirst().performClick()
+            compose.mainClock.advanceTimeBy(160)
+            (0..2).forEach { index ->
+                val now=tileColor(index);val beforeColor=colors[index]
+                assertEquals(beforeColor.red,now.red,.03f);assertEquals(beforeColor.green,now.green,.03f);assertEquals(beforeColor.blue,now.blue,.03f)
+            }
+            compose.mainClock.autoAdvance=true
+            compose.waitForIdle()
             compose.onNodeWithContentDescription("开始播放").assertExists()
             compose.onNodeWithContentDescription("回到主页").assertDoesNotExist()
             assertEquals(tabTop,videoTab().fetchSemanticsNode().boundsInRoot.top,1f)
             compose.onNodeWithText("Video fixture").assertIsNotDisplayed()
+            compose.mainClock.autoAdvance=false
             Espresso.pressBack()
+            compose.mainClock.advanceTimeBy(160)
+            (0..2).forEach { index ->
+                val now=tileColor(index);val beforeColor=colors[index]
+                assertEquals(beforeColor.red,now.red,.03f);assertEquals(beforeColor.green,now.green,.03f);assertEquals(beforeColor.blue,now.blue,.03f)
+            }
+            compose.mainClock.autoAdvance=true
+            compose.waitForIdle()
             compose.onNodeWithText("Video fixture").assertIsDisplayed()
             compose.onNodeWithContentDescription("开始播放").assertDoesNotExist()
             compose.onNodeWithTag("detail_media_grid_1").onChildren().onFirst().performClick()
@@ -120,8 +153,9 @@ class VideoPlayerDeviceTest {
             compose.onNodeWithContentDescription("开始播放").assertDoesNotExist()
             assertEquals(before.top,compose.onNodeWithText("Video fixture").fetchSemanticsNode().boundsInRoot.top,1f)
         } finally {
+            compose.mainClock.autoAdvance=true
             compose.runOnUiThread {activity.setContent {};store.clear()}
-            scope.cancel();db.close();vault.delete();clip.delete()
+            scope.cancel();db.close();vault.delete();clip.delete();frameFiles.forEach {it.delete()}
         }
     }
 }

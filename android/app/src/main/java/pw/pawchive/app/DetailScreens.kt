@@ -103,7 +103,7 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
                     video = index; started = false; expanded = true
                 },
                 onMediaPageChanged = { page -> if (page == 0 && video >= 0) collapsePreview() },
-                movingVideo = video.takeIf { moving }, onVideoTabBounds = { videoTabBounds = it }) {
+                onVideoTabBounds = { videoTabBounds = it }) {
                 if (!fixedHeader) item(key = "detail_info") {
                     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         DetailInfo(post, state.creator, follows.any { it.key == state.creator?.key }, onAuthor, { state.creator?.let(app::follow) })
@@ -171,7 +171,7 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun DetailMediaLayout(post: Post, onImage: (Int) -> Unit, onVideo: (Int) -> Unit,
-    modifier: Modifier = Modifier, onVideoOrigin: ((Int, Rect, android.graphics.Bitmap?) -> Unit)? = null, onMediaPageChanged: (Int) -> Unit = {}, outerState: LazyListState? = null, movingVideo:Int?=null,onVideoTabBounds:(Rect)->Unit={}, header: LazyListScope.() -> Unit = {}) {
+    modifier: Modifier = Modifier, onVideoOrigin: ((Int, Rect, android.graphics.Bitmap?) -> Unit)? = null, onMediaPageChanged: (Int) -> Unit = {}, outerState: LazyListState? = null,onVideoTabBounds:(Rect)->Unit={}, header: LazyListScope.() -> Unit = {}) {
     val pager = rememberPagerState(initialPage = if (post.images.isEmpty() && post.videos.isNotEmpty()) 1 else 0, pageCount = { 2 })
     LaunchedEffect(pager.currentPage) { onMediaPageChanged(pager.currentPage) }
     val outer = outerState ?: rememberLazyListState()
@@ -201,7 +201,7 @@ internal fun DetailMediaLayout(post: Post, onImage: (Int) -> Unit, onVideo: (Int
                                 var bounds by remember { mutableStateOf(Rect.Zero) }
                                 var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
                                 Column(Modifier.fillMaxWidth().clickable(interactionSource=remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication=null) { if (page == 0) onImage(index) else if(onVideoOrigin!=null) onVideoOrigin(index,bounds,bitmap) else onVideo(index) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Box(Modifier.fillMaxWidth().aspectRatio(2f / 3).onGloballyPositioned { bounds=it.boundsInRoot() }.clip(RoundedCornerShape(3.dp)).graphicsLayer {alpha=if(page==1 && movingVideo==index) 0f else 1f}) {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(2f / 3).onGloballyPositioned { bounds=it.boundsInRoot() }.clip(RoundedCornerShape(3.dp))) {
                                         PreviewImage(file, Modifier.fillMaxSize(), "${if (page == 0) "图片" else "视频"} ${index + 1}", onBitmap={bitmap=it})
                                         if (page == 1) Icon(Icons.Outlined.PlayCircle, null, Modifier.size(28.dp).align(Alignment.Center), tint = Color.White)
                                     }

@@ -30,6 +30,16 @@ class QuietPress019Test {
         for (y in 0 until a.height) for (x in 0 until a.width) if (first[x, y] != second[x, y]) changed++
         assertEquals("Pressed state added pixels outside the component's existing appearance", 0, changed)
     }
+    @Test fun allBottomTabsHaveNoPressedBackground() {
+        repeat(3) { index ->
+            val tab=compose.onNodeWithTag("bottom_tab_$index")
+            val before=tab.captureToImage()
+            tab.performTouchInput {down(center)}
+            compose.mainClock.advanceTimeBy(120)
+            samePixels(before,tab.captureToImage())
+            tab.performTouchInput {up()}
+        }
+    }
     @Test fun filterChoiceHasNoRectangularPressedUnderlay() {
         compose.runOnUiThread { compose.activity.setContent { PawTheme(true) { BoxWithConstraints(Modifier.fillMaxSize()) { AdvancedSearchPanel(false, SearchFilters(), maxWidth, maxHeight, {}, {}) } } } }
         val choice = compose.onNodeWithTag("filter_media_image")
