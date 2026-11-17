@@ -77,7 +77,7 @@ class VideoPlayerDeviceTest {
         android.graphics.BitmapFactory.decodeFile(target.absolutePath,bounds)
         assertTrue(bounds.outWidth in 1..480);assertTrue(bounds.outHeight in 1..320)
     }
-    @Test fun imageSwipeRestoresOriginalDetailHeader(): Unit = runBlocking {
+    @Test fun imageSwipeKeepsPlayerAndBackCollapsesToDetail(): Unit = runBlocking {
         val activity=compose.activity
         val clip=File(activity.cacheDir,"video-detail-test.mp4")
         InstrumentationRegistry.getInstrumentation().context.assets.open("video-fixture.mp4").use {input -> clip.outputStream().use {input.copyTo(it)}}
@@ -120,7 +120,12 @@ class VideoPlayerDeviceTest {
             val colors=(0..2).map(::tileColor)
             compose.mainClock.autoAdvance=false
             compose.onNodeWithTag("detail_media_grid_1").onChildren().onFirst().performClick()
-            compose.mainClock.advanceTimeBy(160)
+            compose.mainClock.advanceTimeBy(80)
+            val chrome=compose.onNodeWithContentDescription("开始播放").captureToImage().toPixelMap()
+            val shade=chrome[(chrome.width*.2f).toInt(),chrome.height/2]
+            assertTrue("Play button must be visible DURING entry, not added at the end",shade.red<.7f && shade.green<.3f)
+            compose.onNodeWithTag("video_seek").assertExists()
+            compose.mainClock.advanceTimeBy(80)
             (0..2).forEach { index ->
                 val now=tileColor(index);val beforeColor=colors[index]
                 assertEquals(beforeColor.red,now.red,.03f);assertEquals(beforeColor.green,now.green,.03f);assertEquals(beforeColor.blue,now.blue,.03f)
@@ -147,11 +152,22 @@ class VideoPlayerDeviceTest {
             compose.onNodeWithContentDescription("开始播放").performClick()
             compose.waitUntil(10000) {compose.onAllNodesWithContentDescription("暂停").fetchSemanticsNodes().isNotEmpty()}
             compose.onNodeWithTag("detail_media_pager").performTouchInput {swipeRight()}
-            compose.onNodeWithText("Video fixture").assertExists()
-            compose.onNodeWithText("Original description").assertExists()
+            compose.onNodeWithTag("video_seek").assertExists()
+            compose.onNodeWithText("Video fixture").assertIsNotDisplayed()
             assertEquals(tabTop,videoTab().fetchSemanticsNode().boundsInRoot.top,1f)
-            compose.onNodeWithContentDescription("开始播放").assertDoesNotExist()
+            Espresso.pressBack()
+            compose.onNodeWithTag("video_seek").assertDoesNotExist()
+            compose.onNodeWithText("Video fixture").assertIsDisplayed()
+            compose.onNodeWithText("Original description").assertExists()
             assertEquals(before.top,compose.onNodeWithText("Video fixture").fetchSemanticsNode().boundsInRoot.top,1f)
+            // Playing toolbar Back also collapses to this same detail instead of navigating away.
+            compose.onNodeWithTag("detail_media_pager").performTouchInput {swipeLeft()}
+            compose.onNodeWithTag("detail_media_grid_1").onChildren().onFirst().performClick()
+            compose.onNodeWithContentDescription("开始播放").performClick()
+            compose.waitUntil(10000) {compose.onAllNodesWithContentDescription("暂停").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithContentDescription("返回").performClick()
+            compose.onNodeWithText("Video fixture").assertIsDisplayed()
+            compose.onNodeWithTag("video_seek").assertDoesNotExist()
         } finally {
             compose.mainClock.autoAdvance=true
             compose.runOnUiThread {activity.setContent {};store.clear()}

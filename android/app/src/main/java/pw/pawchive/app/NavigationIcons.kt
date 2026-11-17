@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.roundToInt
 
 @Immutable
-internal data class NavigationBitmaps(val pixels: Int, val home: ImageBitmap, val feed: ImageBitmap, val mine: ImageBitmap, val selectedMine: ImageBitmap)
+internal data class NavigationBitmaps(val pixels: Int, val home: ImageBitmap, val selectedHome: ImageBitmap, val feed: ImageBitmap, val mine: ImageBitmap, val selectedMine: ImageBitmap)
 
 /** Original vector XML is rasterized once per density, off the UI thread. */
 internal class NavigationIconCache(private val context: Context, private val scope: CoroutineScope) {
@@ -30,7 +30,7 @@ internal class NavigationIconCache(private val context: Context, private val sco
         job?.cancel()
         job = scope.launch(Dispatchers.Default) {
             val ready = cache[pixels] ?: NavigationBitmaps(pixels,
-                render(R.drawable.nav_home, pixels), render(R.drawable.nav_dynamic, pixels),
+                render(R.drawable.nav_home, pixels), render(R.drawable.nav_home_active, pixels), render(R.drawable.nav_dynamic, pixels),
                 render(R.drawable.nav_mine, pixels), render(R.drawable.nav_mine_active, pixels)).also { cache.put(pixels, it) }
             ensureActive()
             images.value = ready

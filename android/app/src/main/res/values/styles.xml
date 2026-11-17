@@ -4,12 +4,18 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">#EF7B9C</item>
-        <item name="android:windowBackground">#19191D</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:forceDarkAllowed">false</item>
     </style>
     <style name="Theme.Pawchive.Dark" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:colorAccent">#EF7B9C</item>
         <item name="android:windowBackground">#19191D</item>
+    </style>
+    <!-- Before Android 12 the system cannot read this app's private theme preference.
+         Keep the launcher visible until the correctly themed first frame is ready. -->
+    <style name="Theme.Pawchive.Starting" parent="Theme.Pawchive">
+        <item name="android:windowDisablePreview">true</item>
     </style>
 </resources>

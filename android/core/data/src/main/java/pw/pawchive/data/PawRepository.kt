@@ -56,7 +56,8 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
     val account = MutableStateFlow(AccountState())
     val feedStatus = MutableStateFlow(FeedStatus())
     val indexLoading = MutableStateFlow(false)
-    val dark: Flow<Boolean?> = context.preferences.data.map { it[booleanPreferencesKey("dark")] }
+    val appearance = AppearancePreferences(context)
+    val dark: Flow<Boolean?> = appearance.state.filterNotNull().map { it.dark }.distinctUntilChanged()
     val hideMediaLessWorks: Flow<Boolean> = context.preferences.data.map { it[booleanPreferencesKey("hide_media_less_works")] ?: false }.distinctUntilChanged()
     suspend fun setHideMediaLessWorks(value: Boolean) { context.preferences.edit { it[booleanPreferencesKey("hide_media_less_works")] = value } }
     val hideSuspectedNovels: Flow<Boolean> = context.preferences.data.map { it[booleanPreferencesKey("hide_suspected_novels")] ?: false }.distinctUntilChanged()
@@ -85,7 +86,11 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
         it[stringPreferencesKey("reader_options")]?.let { raw -> runCatching { wireJson.decodeFromString<ReaderSettings>(raw) }.getOrNull() } ?: ReaderSettings()
     }.flowOn(Dispatchers.Default)
     suspend fun setReaderSettings(value: ReaderSettings) { context.preferences.edit { it[stringPreferencesKey("reader_options")] = wireJson.encodeToString(value) } }
-    suspend fun setDark(dark: Boolean) { context.preferences.edit { it[booleanPreferencesKey("dark")] = dark } }
+    suspend fun setDark(dark: Boolean) { appearance.setDark(dark) }
+
+    init { scope.launch(Dispatchers.IO) {
+        appearance.migrate { context.preferences.data.first()[booleanPreferencesKey("dark")] }
+    } }
 
     init { scope.launch(Dispatchers.IO) {
         val saved = vault.load()

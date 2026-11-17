@@ -208,10 +208,10 @@ private fun BottomTabs(selected: Int, images: NavigationBitmaps?, onSelect: (Int
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = with(LocalDensity.current) { 1f.toDp() })
         Row(Modifier.fillMaxWidth().height(ReferenceMetrics.BottomBarHeight).testTag("bottom_navigation")) {
             listOf("首页", "动态", "我的").forEachIndexed { i, label ->
-                val bitmap = images?.let { when(i) { 0 -> it.home; 1 -> it.feed; else -> if (selected == 2) it.selectedMine else it.mine } }
+                val bitmap = images?.let { when(i) { 0 -> if(selected == 0) it.selectedHome else it.home; 1 -> it.feed; else -> if (selected == 2) it.selectedMine else it.mine } }
                 val tint = if (selected == i) Pink else MaterialTheme.colorScheme.onSurfaceVariant
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("bottom_tab_$i").selectable(selected = selected == i, role = Role.Tab,
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = { onSelect(i) }),
+                    onClick = { onSelect(i) }),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Top) {
                     Spacer(Modifier.height(2.5.dp))
                     Box(Modifier.size(ReferenceMetrics.BottomIconViewport).testTag("nav_icon_$i")) { bitmap?.let {

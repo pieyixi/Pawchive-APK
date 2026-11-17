@@ -10,6 +10,9 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.pager.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -23,9 +26,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.activity.compose.BackHandler
-import kotlin.math.roundToInt
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -49,68 +50,54 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
     val favorites by app.favorites.collectAsStateWithLifecycle()
     var video by rememberSaveable(vm.id) { mutableIntStateOf(-1) }
     var expanded by rememberSaveable(vm.id) { mutableStateOf(false) }
-    var started by rememberSaveable(vm.id) { mutableStateOf(false) }
-    var capture by remember { mutableStateOf<(() -> android.graphics.Bitmap?)?>(null) }
-    var closingFrame by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var origin by remember { mutableStateOf<Rect?>(null) }
     var videoTabBounds by remember { mutableStateOf(Rect.Zero) }
     var rootTop by remember { mutableFloatStateOf(0f) }
+    var slotBounds by remember { mutableStateOf(Rect.Zero) }
+    var closingOrigin by remember { mutableStateOf<Rect?>(null) }
+    var closingProgress by remember { mutableFloatStateOf(1f) }
     val progress = remember { Animatable(if(expanded) 1f else 0f) }
     var selectedPoster by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val moving by remember { derivedStateOf { video >= 0 && (progress.value < 1f || !expanded) } }
     fun collapsePreview() {
         if (!expanded) return
-        closingFrame = if (started) capture?.invoke() else null
+        closingProgress = progress.value.coerceAtLeast(.0001f)
+        closingOrigin = interpolateRect(origin ?: slotBounds, slotBounds, progress.value)
         expanded = false
     }
-    BackHandler(video >= 0 && !started) { collapsePreview() }
+    BackHandler(video >= 0) { collapsePreview() }
     LaunchedEffect(expanded, video) {
         if (video >= 0) {
             // Mount the destination once before moving the already decoded poster.
             withFrameNanos { }
             progress.animateTo(if (expanded) 1f else 0f, tween(260, easing = FastOutSlowInEasing))
-            if (!expanded) { video = -1; origin = null; started = false; closingFrame = null; selectedPoster = null }
+            if (!expanded) { video = -1; origin = null; selectedPoster = null }
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize().onGloballyPositioned { rootTop = it.boundsInRoot().top }) {
         val post = state.post
         if (post == null) { StatusContent(state.error == null, state.error, vm::load); return@BoxWithConstraints }
-        val playerHeight = maxWidth * 9f / 16f
-        val fixedHeader = post.videos.isNotEmpty()
+        val playerHeight = (maxWidth * 9f / 16f).coerceAtLeast(200.dp)
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            if (fixedHeader) Box(Modifier.fillMaxWidth().height(playerHeight).testTag("detail_top_slot")) {
+            Box(Modifier.fillMaxWidth().height(playerHeight).testTag("detail_top_slot").onGloballyPositioned {slotBounds=it.boundsInRoot()}) {
                 // Geometry never changes: gallery tabs keep the same Y throughout entry and exit.
                 Column(Modifier.fillMaxSize().then(if (video >= 0 && !moving) Modifier.clearAndSetSemantics {} else Modifier)
                     .graphicsLayer { alpha = if (video >= 0 && !moving) 0f else 1f }
                     .verticalScroll(rememberScrollState())) {
-                    DetailToolbar(onBack)
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    DetailToolbar { if(video >= 0) collapsePreview() else onBack() }
+                    Column(Modifier.padding(horizontal=12.dp,vertical=8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         DetailInfo(post, state.creator, follows.any { it.key == state.creator?.key }, onAuthor, { state.creator?.let(app::follow) })
+                        if(state.error!=null) StatusContent(false,state.error,vm::load)
                     }
                 }
-                post.videos.getOrNull(video)?.let { file -> key(file.path) {
-                    ReferenceVideo(file, post.title, onBack, onHome,
-                        Modifier.fillMaxSize().graphicsLayer { alpha = if (moving) 0f else 1f },
-                        mediaUri = videoUri(file), onLater = { app.later(post) }, onDownload = onFiles,
-                        sourceLink = "$SITE/${post.service}/user/${post.user}/post/${post.id}",
-                        onPreviewBack = { collapsePreview() }, onPlaybackRequested = { started = it },
-                        suspended = !expanded, onCaptureReady = { capture = it }, previewBitmap = selectedPoster)
-                } }
-            } else DetailToolbar(onBack)
+
+            }
             DetailMediaLayout(post, onImage, onVideo, Modifier.weight(1f),
                 onVideoOrigin = { index, bounds, bitmap ->
-                    closingFrame = null; selectedPoster = bitmap; origin = bounds
-                    video = index; started = false; expanded = true
+                    selectedPoster = bitmap; origin = bounds
+                    video = index; expanded = true
                 },
-                onMediaPageChanged = { page -> if (page == 0 && video >= 0) collapsePreview() },
-                onVideoTabBounds = { videoTabBounds = it }) {
-                if (!fixedHeader) item(key = "detail_info") {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        DetailInfo(post, state.creator, follows.any { it.key == state.creator?.key }, onAuthor, { state.creator?.let(app::follow) })
-                    }
-                }
-                if (state.error != null) item(key = "error") { StatusContent(false, state.error, vm::load) }
-            }
+                onVideoTabBounds = { videoTabBounds = it })
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val selected = favorites.any { it.key == post.key }
@@ -120,29 +107,36 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
                 Button(onClick = onFiles, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(5.dp), colors = ButtonDefaults.buttonColors(containerColor = Pink, contentColor = Color(0xFF26121A))) { Text("下载文件") }
             }
         }
-        val source = if (expanded) origin else videoTabBounds.takeIf { it != Rect.Zero }?.let { Rect(it.center, it.center) } ?: origin
-        if (source != null && moving) {
-            val poster = remember(selectedPoster) { selectedPoster?.asImageBitmap() }
-            val frame = remember(closingFrame) { closingFrame?.asImageBitmap() }
-            val background = MaterialTheme.colorScheme.background
-            Canvas(Modifier.fillMaxSize().testTag("video_poster_transition")) {
-                val p = progress.value.coerceIn(0f, 1f)
-                val x = source.left * (1-p); val y = (source.top-rootTop) * (1-p)
-                val w = source.width + (size.width-source.width)*p
-                val h = source.height + (playerHeight.toPx()-source.height)*p
-                drawRoundRect(androidx.compose.ui.graphics.lerp(background, Color.Black, p), Offset(x,y), androidx.compose.ui.geometry.Size(w,h), androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()*(1-p)), alpha = if(expanded) 1f else p)
-                fun fitted(image: androidx.compose.ui.graphics.ImageBitmap, alpha: Float) {
-                    val scale = minOf(w/image.width, h/image.height)
-                    val dw = (image.width*scale).roundToInt().coerceAtLeast(1)
-                    val dh = (image.height*scale).roundToInt().coerceAtLeast(1)
-                    drawImage(image, dstOffset=IntOffset((x+(w-dw)/2).roundToInt(),(y+(h-dh)/2).roundToInt()), dstSize=IntSize(dw,dh), alpha=alpha, filterQuality=androidx.compose.ui.graphics.FilterQuality.Medium)
-                }
-                poster?.let { fitted(it, if(expanded) 1f else p) }
-                frame?.let { fitted(it,p) }
-            }
-        }
+        post.videos.getOrNull(video)?.let { file -> key(file.path) {
+            // One live composition carries the poster AND controls from the first frame.
+            // Uniform layer transforms avoid resizing the surface or handing off a snapshot.
+            ReferenceVideo(file, post.title, { collapsePreview() }, onHome,
+                Modifier.fillMaxWidth().height(playerHeight).graphicsLayer {
+                    val p = progress.value.coerceIn(0f,1f)
+                    val fraction = if(expanded) p else (p/closingProgress).coerceIn(0f,1f)
+                    val destination = slotBounds.takeIf {it!=Rect.Zero} ?: Rect(0f,rootTop,size.width,rootTop+size.height)
+                    val start = if(expanded) origin ?: destination else videoTabBounds.takeIf {it!=Rect.Zero}?.let {Rect(it.center,it.center)} ?: destination
+                    val end = if(expanded) destination else closingOrigin ?: destination
+                    val frame = interpolateRect(start,end,fraction)
+                    val scale = (frame.width/size.width).coerceAtLeast(.0001f)
+                    transformOrigin=androidx.compose.ui.graphics.TransformOrigin(0f,0f)
+                    scaleX=scale;scaleY=scale
+                    translationX=frame.left
+                    translationY=frame.top-rootTop+(frame.height-size.height*scale)/2
+                    alpha=if(expanded) 1f else fraction
+                    shape=RoundedCornerShape(3.dp*(1-p));clip=true
+                },
+                mediaUri=videoUri(file),onLater={app.later(post)},onDownload=onFiles,
+                sourceLink="$SITE/${post.service}/user/${post.user}/post/${post.id}",
+                onPreviewBack={collapsePreview()},suspended=!expanded,previewBitmap=selectedPoster)
+        } }
+
     }
 }
+
+private fun interpolateRect(start:Rect,end:Rect,fraction:Float)=Rect(
+    start.left+(end.left-start.left)*fraction,start.top+(end.top-start.top)*fraction,
+    start.right+(end.right-start.right)*fraction,start.bottom+(end.bottom-start.bottom)*fraction)
 
 @Composable private fun DetailToolbar(onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -153,7 +147,7 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
 }
 
 @Composable private fun DetailInfo(post: Post, creator: Creator?, followed: Boolean, onAuthor: () -> Unit, onFollow: () -> Unit) {
-    Text(post.title.ifBlank { "无标题" }, fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold)
+    OneLineExpandableText(AnnotatedString(post.title.ifBlank { "无标题" }),"detail_title",19.sp,27.sp,FontWeight.SemiBold)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.weight(1f).clickable(onClick = onAuthor), verticalAlignment = Alignment.CenterVertically) {
             Avatar(creator, Modifier.size(42.dp))
@@ -218,8 +212,6 @@ internal fun DetailMediaLayout(post: Post, onImage: (Int) -> Unit, onVideo: (Int
 
 @Composable
 private fun FoldedContent(html: String) {
-    var expanded by rememberSaveable(html.hashCode()) { mutableStateOf(false) }
-    var overflows by remember(html) { mutableStateOf(false) }
     val linkColor = MaterialTheme.colorScheme.primary
     val annotated = remember(html, linkColor) {
         val document = Jsoup.parseBodyFragment(html)
@@ -237,10 +229,28 @@ private fun FoldedContent(html: String) {
             } }
         }
     }
-    Column {
-        Text(annotated, fontSize = 14.sp, lineHeight = 22.sp, maxLines = if (expanded) Int.MAX_VALUE else 3,
-            overflow = TextOverflow.Ellipsis, onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow })
-        if (expanded || overflows) TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) { Text(if (expanded) "收起" else "展开全文") }
+    OneLineExpandableText(annotated,"detail_content",14.sp,22.sp)
+
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun OneLineExpandableText(text:AnnotatedString,tag:String,fontSize:TextUnit,lineHeight:TextUnit,weight:FontWeight?=null) {
+    var overflows by remember(text) {mutableStateOf(false)}
+    var expanded by rememberSaveable(text.hashCode()) {mutableStateOf(false)}
+    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+        Text(text,Modifier.weight(1f).testTag("${tag}_line"),fontSize=fontSize,lineHeight=lineHeight,fontWeight=weight,
+            maxLines=1,overflow=TextOverflow.Ellipsis,onTextLayout={overflows=it.hasVisualOverflow})
+        if(overflows) Text("展开",Modifier.padding(start=8.dp).heightIn(min=24.dp).testTag("${tag}_expand").clickable {expanded=true},
+            color=Pink,fontSize=14.sp,lineHeight=24.sp)
+    }
+    if(expanded) ModalBottomSheet(onDismissRequest={expanded=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),
+        shape=RoundedCornerShape(topStart=12.dp,topEnd=12.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(max=androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp*.75f)
+            .verticalScroll(rememberScrollState()).padding(horizontal=16.dp).padding(bottom=32.dp)) {
+            SelectionContainer(Modifier.filterTextContextMenuComponents {it.key==TextContextMenuKeys.CopyKey}) {
+                Text(text,Modifier.testTag("${tag}_full"),fontSize=fontSize,lineHeight=lineHeight,fontWeight=weight)
+            }
+        }
     }
 }
 

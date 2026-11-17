@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.map
 import kotlinx.serialization.*
 import pw.pawchive.data.*
 import pw.pawchive.media.reader.*
@@ -41,16 +40,17 @@ class ReaderActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         val container = (application as PawApplication).container
+        val appearanceWindow = AppearanceWindow(this, container.repository.appearance.state.value)
+        super.onCreate(savedInstanceState)
+        appearanceWindow.awaitFirstComposition()
         val repository = container.repository
         val service = intent.getStringExtra("service") ?: return finish()
         val user = intent.getStringExtra("user") ?: return finish()
         val postId = intent.getStringExtra("post") ?: return finish()
         val initialPage = intent.getIntExtra("page", 0)
         setContent {
-            val appearance by remember(repository) { repository.dark.map { ReaderAppearance(it) } }.collectAsStateWithLifecycle<ReaderAppearance?>(null)
+            val appearance by repository.appearance.state.collectAsStateWithLifecycle()
             val settings by repository.readerSettings.collectAsStateWithLifecycle<ReaderSettings?>(null)
             var post by remember { mutableStateOf<Post?>(null) }
             var error by remember { mutableStateOf<String?>(null) }
@@ -58,12 +58,10 @@ class ReaderActivity : ComponentActivity() {
                 try { post = repository.cachedPosts("post:$service:$user:$postId").firstOrNull() ?: repository.post(service, user, postId) }
                 catch (e: Exception) { if (e is CancellationException) throw e; error = e.message }
             }
-            val loaded = appearance
-            if (loaded == null) { Box(Modifier.fillMaxSize().background(Color(0xFF19191D))); return@setContent }
+            val loaded = appearance ?: return@setContent
             val dark = loaded.dark ?: isSystemInDarkTheme()
             SideEffect {
-                setTheme(if (dark) R.style.Theme_Pawchive_Dark else R.style.Theme_Pawchive)
-                enableEdgeToEdge(statusBarStyle = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT) else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT), navigationBarStyle = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT) else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT))
+                appearanceWindow.apply(dark, loaded.dark)
             }
             PawTheme(dark) {
                 val save = rememberSaveAction(container)
@@ -130,4 +128,3 @@ class ReaderActivity : ComponentActivity() {
         return super.onKeyUp(keyCode, event)
     }
 }
-private data class ReaderAppearance(val dark: Boolean?)
