@@ -68,18 +68,23 @@ class QuietPress019Test {
         val repo = (compose.activity.application as PawApplication).container.repository
         val previous = repo.feedStatus.value
         val background = Color(0xFF0C1A28)
+        compose.mainClock.autoAdvance = false
         try {
             compose.runOnUiThread {
                 val app = androidx.lifecycle.ViewModelProvider(compose.activity, vmFactory { AppViewModel(repo) })["quiet-spinner", AppViewModel::class.java]
                 repo.feedStatus.value = FeedStatus(running = true)
                 compose.activity.setContent { MaterialTheme(colorScheme = darkColorScheme(background = background, surface = Color.Gray)) { FeedScreen(app, {}, {}) } }
             }
+            compose.mainClock.advanceTimeBy(160)
             val image = compose.onNodeWithTag("feed_refresh_spinner").captureToImage()
             val pixels = image.toPixelMap()
             val cx = image.width / 2; val cy = image.height / 2
             for ((x, y) in listOf(cx to cy, cx to image.height / 10, image.width / 10 to cy, cx to image.height * 9 / 10)) {
                 assertEquals("Refresh spinner painted a surface behind its pink arc", background.toArgb(), pixels[x, y].toArgb())
             }
-        } finally { compose.runOnUiThread { repo.feedStatus.value = previous } }
+        } finally {
+            compose.runOnUiThread { repo.feedStatus.value = previous; compose.activity.setContent {} }
+            compose.mainClock.autoAdvance = true
+        }
     }
 }

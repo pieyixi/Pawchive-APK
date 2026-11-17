@@ -28,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -228,10 +229,8 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                 Avatar(creator, Modifier.size(50.dp)); Text(creator.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
             } }
         }
-        PullToRefreshBox(isRefreshing = status.running, onRefresh = { app.refreshFeed() }, state = refresh, modifier = Modifier.weight(1f), indicator = {
-            if (refresh.distanceFraction > 0 || status.running) Box(Modifier.align(Alignment.TopCenter).offset { IntOffset(0, ((if (status.running) 1f else refresh.distanceFraction).coerceAtMost(1.5f) * 60 - 48).dp.roundToPx()) }.size(44.dp).testTag("feed_refresh_spinner"), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(Modifier.size(26.dp), color = Pink, trackColor = androidx.compose.ui.graphics.Color.Transparent, strokeWidth = 2.5.dp)
-            }
+        PullToRefreshBox(isRefreshing = status.running, onRefresh = { app.refreshFeed() }, state = refresh, modifier = Modifier.weight(1f).clipToBounds(), indicator = {
+            FeedRefreshIndicator(status.running, { refresh.distanceFraction }, Modifier.align(Alignment.TopCenter))
         }) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("feed_list")) {
                 item(key = "heading") { Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
