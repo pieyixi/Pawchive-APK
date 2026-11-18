@@ -61,13 +61,13 @@ class UpdateAndNovelSettingsTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val body = when {
-                chain.request().url.host == "api.github.com" -> release("0.2.1").toByteArray()
-                chain.request().url.encodedPath.endsWith("SHA256SUMS.txt") -> "$digest  Pawchive-0.2.1.apk".toByteArray()
+                chain.request().url.host == "api.github.com" -> release("0.2.2").toByteArray()
+                chain.request().url.encodedPath.endsWith("SHA256SUMS.txt") -> "$digest  Pawchive-0.2.2.apk".toByteArray()
                 else -> bytes
             }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody("application/octet-stream".toMediaType())).build()
         }.build()
-        val finalFile = java.io.File(application.cacheDir, "updates/Pawchive-0.2.1.apk")
+        val finalFile = java.io.File(application.cacheDir, "updates/Pawchive-0.2.2.apk")
         try {
             val updater = AppUpdater(application, scope, client)
             updater.check(); withTimeout(10000) { updater.state.first { !it.busy } }

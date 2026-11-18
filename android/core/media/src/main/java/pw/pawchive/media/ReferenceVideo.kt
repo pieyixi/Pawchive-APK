@@ -71,6 +71,17 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     val context=LocalContext.current
     val clipboard=LocalClipboardManager.current
     val activity=context.activity()
+    val audio = remember(context) { context.getSystemService(android.media.AudioManager::class.java) }
+    val stream = android.media.AudioManager.STREAM_MUSIC
+    var volumeStart by remember { mutableIntStateOf(0) }
+    var volumeLevel by remember { mutableStateOf<Int?>(null) }
+    var displayedVolume by remember { mutableIntStateOf(0) }
+    var volumeDragging by remember { mutableStateOf(false) }
+    val volumeMax = remember(audio) { audio.getStreamMaxVolume(stream) }
+    LaunchedEffect(volumeDragging, volumeLevel != null, suspended) {
+        if (suspended) { volumeDragging = false; volumeLevel = null }
+        else if (!volumeDragging && volumeLevel != null) { delay(650); volumeLevel = null }
+    }
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var requested by rememberSaveable(file.path) { mutableStateOf(false) }
     var full by rememberSaveable { mutableStateOf(false) }
@@ -141,7 +152,29 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     val content=remember { movableContentOf {
         Box(Modifier.fillMaxSize().background(Color.Black).testTag("video_surface")
             .videoScrubInput(requested && duration>0 && panel==null, onStart={beginSeek()}, duration={duration},
-                onPreview={previewSeek(it)}, onFinish={endSeek(true)}, onCancel={endSeek(false)}, onTap={controls=!controls;interaction++})) {
+                onPreview={previewSeek(it)}, onFinish={endSeek(true)}, onCancel={endSeek(false)}, onTap={controls=!controls;interaction++},
+                onVolumeStart={ point, width ->
+                    val allowed = requested && !suspended && panel == null && point.x >= width / 2f && volumeMax > 0 && !audio.isVolumeFixed
+                    if (allowed) {
+                        volumeStart = audio.getStreamVolume(stream)
+                        volumeDragging = true
+                        volumeLevel = volumeStart
+                        displayedVolume = volumeStart
+                        controls = false
+                        interaction++
+                    }
+                    allowed
+                },
+                onVolumeDrag={ fraction ->
+                    // Portrait samples: 30–60px on a 608px surface moved 7–15% of the range.
+                    val target = (volumeStart + java.lang.Math.round(fraction * volumeMax * 1.5f)).coerceIn(0, volumeMax)
+                    if (target != volumeLevel) {
+                        try { audio.setStreamVolume(stream, target, 0) } catch (_: SecurityException) { }
+                        volumeLevel = audio.getStreamVolume(stream)
+                    }
+                    displayedVolume = volumeLevel ?: volumeStart
+                },
+                onVolumeEnd={ volumeDragging = false })) {
             val scrubbing = seekPreview != null
             val shownPosition = seekPreview ?: position
             val quiet = Modifier.graphicsLayer { alpha = if(scrubbing) 0f else 1f }
@@ -155,7 +188,7 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                 else PreviewImage(file,Modifier.fillMaxSize(),background=Color.Black)
             }
             if(!requested) Box(Modifier.size(72.dp).align(Alignment.Center).background(Color.Black.copy(alpha=.35f),androidx.compose.foundation.shape.CircleShape).semanticsLabel("开始播放").clickable { requested=true;interaction++ },contentAlignment=Alignment.Center) { VideoGlyph("play",Modifier.size(32.dp)) }
-            if(buffering && !scrubbing) CircularProgressIndicator(Modifier.size(28.dp).align(Alignment.Center),color=VideoPink,strokeWidth=2.dp)
+            if(buffering && !scrubbing && volumeLevel == null) CircularProgressIndicator(Modifier.size(28.dp).align(Alignment.Center),color=VideoPink,strokeWidth=2.dp)
             if(controls) {
                 Box(Modifier.fillMaxWidth().height(72.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent))))
                 Row(quiet.align(Alignment.TopStart).fillMaxWidth().padding(top=4.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -186,6 +219,35 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                 }
             }
             error?.let { message -> Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.8f)).padding(12.dp)) { Text(message,color=Color.White);TextButton(onClick={error=null;player.prepare();player.play()}) {Text("重试")} } }
+            androidx.compose.animation.AnimatedVisibility(
+                visible = volumeLevel != null && panel == null && !suspended,
+                modifier = Modifier.align(Alignment.Center),
+                enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(90)),
+                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(180)),
+            ) {
+                Box(
+                    Modifier.size(150.dp, 44.dp)
+                        .background(Color.Black.copy(alpha = .3f),
+                            androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                        .testTag("video_volume_overlay")
+                ) {
+                    Icon(
+                        androidx.compose.ui.res.painterResource(
+                            if (displayedVolume == 0) R.drawable.video_volume_1 else R.drawable.video_volume_2),
+                        "音量",
+                        Modifier.align(Alignment.CenterStart).offset(x = 10.dp).size(24.dp),
+                        tint = Color.White
+                    )
+                    Canvas(Modifier.align(Alignment.CenterStart).offset(x = 57.dp).size(70.dp, 1.5.dp)) {
+                        val fraction = displayedVolume.toFloat() / volumeMax.coerceAtLeast(1)
+                        val radius = androidx.compose.ui.geometry.CornerRadius(size.height / 2)
+                        drawRoundRect(Color.White.copy(alpha = .2f), cornerRadius = radius)
+                        if (fraction > 0f) drawRoundRect(VideoPink,
+                            size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height),
+                            cornerRadius = radius)
+                    }
+                }
+            }
             if(panel!=null) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.CenterEnd) {
                 VideoMenus(panel,full,speed,loop,{panel=null;interaction++},{rate -> speed=rate;player.setPlaybackSpeed(rate)},
                     {enabled -> loop=enabled;player.repeatMode=if(enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF},

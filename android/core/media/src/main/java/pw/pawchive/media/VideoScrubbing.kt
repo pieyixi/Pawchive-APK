@@ -21,8 +21,14 @@ internal fun Modifier.videoScrubInput(
     enabled: Boolean, track: Boolean = false, onStart: () -> Long?, duration: () -> Long,
     onPreview: (Long) -> Unit, onFinish: () -> Unit, onCancel: () -> Unit,
     onTap: (Offset) -> Unit = {},
+    onVolumeStart: (Offset, Int) -> Boolean = { _, _ -> false },
+    onVolumeDrag: (Float) -> Unit = {},
+    onVolumeEnd: () -> Unit = {},
 ): Modifier {
     val actions by rememberUpdatedState(ScrubActions(onStart, duration, onPreview, onFinish, onCancel, onTap))
+    val volumeStart by rememberUpdatedState(onVolumeStart)
+    val volumeDrag by rememberUpdatedState(onVolumeDrag)
+    val volumeEnd by rememberUpdatedState(onVolumeEnd)
     return pointerInput(enabled, track) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -30,6 +36,7 @@ internal fun Modifier.videoScrubInput(
             if (down.isConsumed) return@awaitEachGesture
             if (track && enabled) down.consume()
             var active = false
+            var volume = false
             var finished = false
             var base = 0L
             try {
@@ -39,7 +46,9 @@ internal fun Modifier.videoScrubInput(
                     if (change.isConsumed || event.changes.any { it.id != down.id && it.pressed }) break
                     val delta = change.position - down.position
                     if (!change.pressed) {
-                        if (active) {
+                        if (volume) {
+                            change.consume()
+                        } else if (active) {
                             change.consume(); finished = true; actions.finish()
                         } else if (delta.getDistance() <= viewConfiguration.touchSlop) {
                             if (track && enabled) {
@@ -52,8 +61,19 @@ internal fun Modifier.videoScrubInput(
                         }
                         break
                     }
+                    if (!active && !volume) {
+                        if (abs(delta.y) > viewConfiguration.touchSlop && abs(delta.y) > abs(delta.x)) {
+                            if (track || !volumeStart(down.position, size.width)) break
+                            volume = true
+                        }
+                    }
+                    if (volume) {
+                        change.consume()
+                        // Slop decides ownership. Once claimed, count the entire drag.
+                        volumeDrag(-delta.y / size.height.coerceAtLeast(1))
+                        continue
+                    }
                     if (!active) {
-                        if (abs(delta.y) > viewConfiguration.touchSlop && abs(delta.y) > abs(delta.x)) break
                         if (abs(delta.x) <= viewConfiguration.touchSlop) continue
                         if (!enabled) break
                         base = actions.start() ?: break
@@ -66,6 +86,7 @@ internal fun Modifier.videoScrubInput(
                     actions.preview(target)
                 }
             } finally {
+                if (volume) volumeEnd()
                 if (active && !finished) actions.cancel()
             }
         }

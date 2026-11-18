@@ -102,7 +102,9 @@ fun DetailScreen(vm: DetailViewModel, app: AppViewModel, onBack: () -> Unit, onA
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val selected = favorites.any { it.key == post.key }
                 Button(onClick = { app.favorite(post) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(5.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface)) {
-                    Icon(if (selected) Icons.Outlined.Star else Icons.Outlined.StarOutline, null, Modifier.size(22.dp)); Text(if (selected) "已收藏" else "收藏")
+                    Icon(if (selected) Icons.Outlined.Star else Icons.Outlined.StarOutline, null, Modifier.size(22.dp),
+                        tint = if (selected) Color(0xFFE6A700) else LocalContentColor.current)
+                    Text(if (selected) "已收藏" else "收藏")
                 }
                 Button(onClick = onFiles, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(5.dp), colors = ButtonDefaults.buttonColors(containerColor = Pink, contentColor = Color(0xFF26121A))) { Text("下载文件") }
             }
