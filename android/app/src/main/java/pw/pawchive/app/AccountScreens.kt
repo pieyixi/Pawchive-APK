@@ -29,30 +29,28 @@ fun MineScreen(app: AppViewModel, dark: Boolean, toggleTheme: () -> Unit, open: 
     val account by app.account.collectAsStateWithLifecycle()
     val follows by app.follows.collectAsStateWithLifecycle()
     val favorites by app.favorites.collectAsStateWithLifecycle()
-    LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        item {
-            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.End) {
-                IconButton(onClick = toggleTheme) { Icon(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, if (dark) "切换亮色" else "切换暗色") }
-            }
-            Row(Modifier.fillMaxWidth().clickable(enabled = !account.restoring) { open(if (account.username == null) LoginKey else SettingsKey) }.padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(null, Modifier.size(64.dp))
-                Text(account.username ?: if (account.restoring) "正在恢复账号" else "点击登录", fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp))
-            }
-            Row(Modifier.fillMaxWidth().padding(vertical = 20.dp)) {
-                listOf("关注" to follows.size, "收藏" to favorites.size).forEachIndexed { i, pair ->
-                    Column(Modifier.weight(1f).clickable { open(CollectionKey(if (i == 0) "author" else "favorite")) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("${pair.second}", fontSize = 22.sp); Text(pair.first, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp))
-                    }
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.End) {
+            IconButton(onClick = toggleTheme) { Icon(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, if (dark) "切换亮色" else "切换暗色") }
+        }
+        Row(Modifier.fillMaxWidth().clickable(enabled = !account.restoring) { open(if (account.username == null) LoginKey else SettingsKey) }.padding(horizontal = 22.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Avatar(null, Modifier.size(64.dp))
+            Text(account.username ?: if (account.restoring) "正在恢复账号" else "点击登录", fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 16.dp))
+        }
+        Row(Modifier.fillMaxWidth().padding(vertical = 20.dp)) {
+            listOf("关注" to follows.size, "收藏" to favorites.size).forEachIndexed { i, pair ->
+                Column(Modifier.weight(1f).clickable { open(CollectionKey(if (i == 0) "author" else "favorite")) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${pair.second}", fontSize = 22.sp); Text(pair.first, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 5.dp))
                 }
             }
         }
-        item { MenuRow("我的关注", { open(CollectionKey("author")) }) { Icon(Icons.Outlined.PersonOutline, null) } }
-        item { MenuRow("我的收藏", { open(CollectionKey("favorite")) }) { Icon(Icons.Outlined.StarOutline, null) } }
-        item { MenuRow("浏览历史", { open(CollectionKey("history")) }) { Icon(Icons.Outlined.History, null) } }
-        item { MenuRow("稍后再看", { open(CollectionKey("later")) }) { Icon(Icons.Outlined.WatchLater, null) } }
-        item { MenuRow("屏蔽作者", { open(CollectionKey("blocked")) }) { Icon(Icons.Outlined.Block, null) } }
-        item { MenuRow("下载管理", { open(TransfersKey) }) { Icon(Icons.Outlined.Download, null) } }
-        item { MenuRow("设置", { open(SettingsKey) }) { Icon(Icons.Outlined.Settings, null) } }
+        MenuRow("我的关注", { open(CollectionKey("author")) }) { Icon(Icons.Outlined.PersonOutline, null) }
+        MenuRow("我的收藏", { open(CollectionKey("favorite")) }) { Icon(Icons.Outlined.StarOutline, null) }
+        MenuRow("浏览历史", { open(CollectionKey("history")) }) { Icon(Icons.Outlined.History, null) }
+        MenuRow("稍后再看", { open(CollectionKey("later")) }) { Icon(Icons.Outlined.WatchLater, null) }
+        MenuRow("屏蔽作者", { open(CollectionKey("blocked")) }) { Icon(Icons.Outlined.Block, null) }
+        MenuRow("下载管理", { open(TransfersKey) }) { Icon(Icons.Outlined.Download, null) }
+        MenuRow("设置", { open(SettingsKey) }) { Icon(Icons.Outlined.Settings, null) }
     }
 }
 @Composable

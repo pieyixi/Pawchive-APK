@@ -142,7 +142,8 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
             entry<MineKey> { RootDestination(2, selectTab, container.navigationIcons) { MineScreen(app, latestDark, { app.action { repo.setDark(!latestDark) } }, { latestOpen(it) }) } }
             entry<AuthorKey> { key ->
                 val vm: AuthorViewModel = viewModel(factory = vmFactory { AuthorViewModel(repo, key.service, key.user) })
-                AuthorScreen(vm, app, { latestBack() }, { latestOpen(PostKey(it.service, it.user, it.id)) })
+                AuthorScreen(vm, app, { latestBack() }, { latestOpen(PostKey(it.service, it.user, it.id)) },
+                    { latestOpen(AuthorKey(it.service, it.id)) })
             }
             entry<PostKey> { key ->
                 val vm: DetailViewModel = viewModel(factory = vmFactory { DetailViewModel(repo, key.service, key.user, key.post) })

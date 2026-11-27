@@ -89,7 +89,13 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
                 val debounce = previous != null && previous!!.second == value.second && previous!!.third == value.third
                 previous = value
                 debounceJob?.cancel()
-                if (debounce) debounceJob = viewModelScope.launch { delay(250); load(false) }
+                if (debounce) {
+                    // The old request loses ownership as soon as the query changes.
+                    requestId++
+                    request?.cancel()
+                    state.value = state.value.copy(loading = true, error = null)
+                    debounceJob = viewModelScope.launch { delay(250); load(false) }
+                }
                 else load(false)
             }
         }
@@ -127,23 +133,27 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
                     mediaOnly = repo.hideMediaLessWorks.first() && (q.isNotBlank() || !options.isDefault)
                     val popular = q.isBlank() && options.isDefault
                     val cache = if (popular) "public:home:popular" else "public:home:$q:${wireJson.encodeToString(options)}"
-                    if (!append) {
-                        val cachedPage = if (popular) null else repo.cachedWorkPage(cache)
+                    if (!append || popular) {
+                        val cachedPage = if (popular) repo.cachedPopularPage(offset) else repo.cachedWorkPage(cache)
                         val cached = cachedPage?.page?.rawPosts ?: repo.cachedPosts(cache)
-                        if (cachedPage != null || cached.isNotEmpty()) {
-                            rawPosts = cached
-                            offset = cachedPage?.page?.nextOffset ?: cached.size
-                            val fresh = cachedPage != null && System.currentTimeMillis() - cachedPage.checkedAt in 0L..300_000L && !force
-                            state.value = HomeState(posts = visiblePosts(), loading = !fresh, more = cachedPage?.page?.more ?: true)
-                            if (fresh) { cacheHit = true; return@launch }
-                        } else { rawPosts = emptyList(); state.value = HomeState(loading = true) }
+                        if (token != requestId) return@launch
+                        if ((cachedPage != null && !popular) || cached.isNotEmpty()) {
+                            val maxAge = if (popular) POPULAR_CACHE_MS else 300_000L
+                            val fresh = cachedPage != null && System.currentTimeMillis() - cachedPage.checkedAt in 0L until maxAge && (popular || !force)
+                            if (!append || fresh) {
+                                rawPosts = if (append) (rawPosts + cached).distinctBy { it.key } else cached
+                                state.value = HomeState(posts = visiblePosts(), loading = !fresh, more = cachedPage?.page?.more ?: true)
+                            }
+                            if (fresh) { offset = cachedPage!!.page.nextOffset; cacheHit = true; return@launch }
+                        } else if (!append) { rawPosts = emptyList(); state.value = HomeState(loading = true) }
                         // Expired cache is a display fallback, not the next network offset.
-                        offset = 0
+                        if (!append) offset = 0
                     }
-                    val batch = if (popular) repo.popularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) }
+                    val batch = if (popular) repo.fetchPopularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) }
                         else withTimeoutOrNull(20_000) { repo.searchWorkPage(q, offset, mediaOnly, options, !append) } ?: throw java.io.IOException("网站响应较慢，请重试")
                     if (token == requestId) {
                         if (!append && !popular) repo.storeWorkPage(cache, batch)
+                        if (token != requestId) return@launch
                         rawPosts = (if (append) (rawPosts + batch.rawPosts).distinctBy { it.key } else batch.rawPosts).distinctBy { it.key }.map { it.compact() }
                         state.value = HomeState(posts = visiblePosts(), more = batch.more); offset = batch.nextOffset
                     }
@@ -157,9 +167,20 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
 data class AuthorState(val creator: Creator? = null, val posts: List<Post> = emptyList(), val loading: Boolean = true, val more: Boolean = true, val error: String? = null)
 class AuthorViewModel(private val repo: PawRepository, val service: String, val user: String) : ViewModel() {
     val state = MutableStateFlow(AuthorState())
+    private val _similarCreators = MutableStateFlow<List<Creator>>(emptyList())
+    val similarCreators = _similarCreators.asStateFlow()
     private var offset = 0
     private var loading = false
-    init { load(false) }
+    init {
+        load(false)
+        viewModelScope.launch {
+            try {
+                withTimeoutOrNull(8_000) { repo.similarCreators(service, user) }?.let { _similarCreators.value = it }
+            } catch (e: java.io.IOException) {
+                // Recommendations are optional. Keep the author's profile and works available.
+            }
+        }
+    }
     fun load(append: Boolean) {
         if (loading || (append && !state.value.more)) return
         loading = true
@@ -184,15 +205,30 @@ class AuthorViewModel(private val repo: PawRepository, val service: String, val 
 data class DetailState(val post: Post? = null, val creator: Creator? = null, val error: String? = null)
 class DetailViewModel(private val repo: PawRepository, val service: String, val user: String, val id: String) : ViewModel() {
     val state = MutableStateFlow(DetailState())
+    private var request: Job? = null
     init { load() }
-    fun load() { viewModelScope.launch {
-        try {
-            val cached = repo.cachedPosts("post:$service:$user:$id").firstOrNull()
-            if (cached != null) state.value = state.value.copy(post = cached)
-            val post = repo.post(service, user, id)
-            state.value = DetailState(post, runCatching { repo.author(service, user) }.getOrNull())
-        } catch (e: Exception) { if (e is CancellationException) throw e; state.value = state.value.copy(error = e.message ?: "加载失败") }
-    } }
+    fun load() {
+        if (request?.isActive == true) return
+        request = viewModelScope.launch {
+            state.value = state.value.copy(error = null)
+            try {
+                val cached = repo.cachedPosts("post:$service:$user:$id").firstOrNull()
+                if (cached != null) state.value = state.value.copy(post = cached)
+                val post = withTimeoutOrNull(20_000) { repo.post(service, user, id) }
+                    ?: throw java.io.IOException("作品加载超时，请重试")
+                // The author's profile should not block access to the work or media.
+                state.value = state.value.copy(post = post)
+                val creator = withTimeoutOrNull(8_000) {
+                    try { repo.author(service, user) }
+                    catch (e: Exception) { if (e is CancellationException) throw e; null }
+                }
+                if (creator != null) state.value = state.value.copy(creator = creator)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                state.value = state.value.copy(error = e.message ?: "加载失败")
+            }
+        }
+    }
 }
 
 inline fun <reified T : ViewModel> vmFactory(crossinline make: (SavedStateHandle) -> T) = object : ViewModelProvider.Factory {

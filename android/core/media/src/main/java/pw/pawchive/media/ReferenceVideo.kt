@@ -95,7 +95,15 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     var loop by rememberSaveable { mutableStateOf(false) }
 
     var speed by rememberSaveable { mutableFloatStateOf(1f) }
-    val player=remember(file.path) { ExoPlayer.Builder(context.applicationContext).build().apply { setAudioAttributes(AudioAttributes.DEFAULT,true);setHandleAudioBecomingNoisy(true) } }
+    val activePlayer = remember(file.path, requested) {
+        if (requested) ExoPlayer.Builder(context.applicationContext).build().apply {
+            setAudioAttributes(AudioAttributes.DEFAULT, true)
+            setHandleAudioBecomingNoisy(true)
+            setPlaybackSpeed(speed)
+            repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        } else null
+    }
+    val player by rememberUpdatedState(activePlayer)
     var texture by remember { mutableStateOf<TextureView?>(null) }
     DisposableEffect(player) {
         onCaptureReady { texture?.takeIf {it.isAvailable && it.width>0 && it.height>0}?.let {view ->
@@ -108,10 +116,12 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     var duration by remember { mutableLongStateOf(0) }
     var buffered by remember { mutableLongStateOf(0) }
     var buffering by remember { mutableStateOf(false) }
+    var videoRatio by remember(file.path) { mutableFloatStateOf(16f / 9f) }
     var seekPreview by remember { mutableStateOf<Long?>(null) }
     var resumeAfterSeek by remember { mutableStateOf(false) }
     fun beginSeek(): Long? {
         if (!requested || duration <= 0 || suspended) return null
+        val player = player ?: return null
         if (seekPreview == null) {
             resumeAfterSeek = player.playWhenReady
             player.pause()
@@ -124,24 +134,68 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
     fun endSeek(commit: Boolean) {
         val target = seekPreview ?: return
         seekPreview = null
+        val player = player ?: return
         if (commit) { player.seekTo(target); position = target }
         if (resumeAfterSeek && !suspended && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) player.play()
         resumeAfterSeek = false; controls = true; interaction++
     }
     var firstFrame by remember(file.path) { mutableStateOf(false) }
-    DisposableEffect(player,lifecycle) {
+    var preparingAt by remember { mutableLongStateOf(0L) }
+    DisposableEffect(activePlayer,lifecycle) {
+        val player = activePlayer ?: return@DisposableEffect onDispose {}
+        fun updateState() {
+            position = player.currentPosition
+            duration = player.duration.coerceAtLeast(0)
+            buffered = player.bufferedPosition
+            playing = player.isPlaying
+            buffering = player.playbackState == Player.STATE_BUFFERING
+        }
         val listener=object: Player.Listener {
-            override fun onRenderedFirstFrame() { firstFrame=true }
-            override fun onPlayerError(e: PlaybackException) { error="播放失败，请重试";controls=true }
+            override fun onEvents(player: Player, events: Player.Events) { updateState() }
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoRatio = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                }
+            }
+            override fun onRenderedFirstFrame() {
+                firstFrame = true
+                if (preparingAt > 0) {
+                    android.util.Log.d("PawVideo", "firstFrameMs=${android.os.SystemClock.elapsedRealtime() - preparingAt}")
+                    preparingAt = 0
+                }
+            }
+            override fun onPlayerError(e: PlaybackException) {
+                android.util.Log.w("PawVideo", "playbackError=${e.errorCode}")
+                error="播放失败，请重试"; controls=true
+            }
         }
         player.addListener(listener)
         val observer=LifecycleEventObserver { _,event -> if(event==Lifecycle.Event.ON_STOP) { resumeAfterSeek=false;seekPreview=null;position=player.currentPosition;player.pause() } }
         lifecycle.addObserver(observer)
         onDispose { position=player.currentPosition;lifecycle.removeObserver(observer);player.removeListener(listener);player.release() }
     }
-    LaunchedEffect(requested) { onPlaybackRequested(requested);if(requested) { player.setMediaItem(MediaItem.fromUri(mediaUri));player.seekTo(position);player.prepare();player.play() } }
-    LaunchedEffect(suspended) { if(suspended) {resumeAfterSeek=false;seekPreview=null;player.pause()} }
-    LaunchedEffect(player) { while(true) { position=player.currentPosition;duration=player.duration.coerceAtLeast(0);buffered=player.bufferedPosition;playing=player.isPlaying;buffering=player.playbackState==Player.STATE_BUFFERING;delay(200) } }
+    LaunchedEffect(activePlayer, mediaUri) {
+        onPlaybackRequested(requested)
+        val player = activePlayer ?: return@LaunchedEffect
+        preparingAt = android.os.SystemClock.elapsedRealtime()
+        firstFrame = false
+        player.setMediaItem(MediaItem.fromUri(mediaUri), position)
+        player.prepare()
+        if (!suspended) player.play()
+    }
+    LaunchedEffect(suspended) { if(suspended) {resumeAfterSeek=false;seekPreview=null;player?.pause()} }
+    LaunchedEffect(activePlayer, controls, playing, buffering, suspended) {
+        val player = activePlayer ?: return@LaunchedEffect
+        if (!suspended && controls) {
+            position = player.currentPosition
+            buffered = player.bufferedPosition
+            while (playing || buffering) {
+                delay(200)
+                position = player.currentPosition
+                buffered = player.bufferedPosition
+            }
+        }
+    }
     LaunchedEffect(controls,playing,interaction,panel,seekPreview!=null) { if(controls && playing && panel==null && seekPreview==null) { delay(3500);controls=false } }
     DisposableEffect(playing) { if(playing) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);onDispose { activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) } }
     DisposableEffect(full) {
@@ -178,11 +232,11 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
             val scrubbing = seekPreview != null
             val shownPosition = seekPreview ?: position
             val quiet = Modifier.graphicsLayer { alpha = if(scrubbing) 0f else 1f }
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val ratio=if(player.videoSize.width>0 && player.videoSize.height>0) player.videoSize.width.toFloat()/player.videoSize.height else 16f/9f
+            player?.let { player -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                val ratio = videoRatio
                 val w=minOf(maxWidth,maxHeight*ratio)
                 AndroidView(factory={ TextureView(it).apply { texture=this;player.setVideoTextureView(this) } },modifier=Modifier.align(Alignment.Center).size(w,w/ratio),onRelease={if(texture===it) texture=null;player.clearVideoTextureView(it)})
-            }
+            } }
             if(!firstFrame) {
                 if(previewBitmap!=null) Image(previewBitmap.asImageBitmap(),null,Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Fit)
                 else PreviewImage(file,Modifier.fillMaxSize(),background=Color.Black)
@@ -204,7 +258,11 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                     }
                     Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
                         GlyphButton(if(playing) "pause" else "play",if(playing) "暂停" else "播放", quiet) {
-                            if(!requested) requested=true else if(player.isPlaying) player.pause() else { if(player.playbackState==Player.STATE_ENDED) player.seekTo(0);player.play() };interaction++
+                            val current = player
+                            if (current == null) requested = true
+                            else if (current.playWhenReady && current.playbackState != Player.STATE_ENDED) current.pause()
+                            else { if(current.playbackState==Player.STATE_ENDED) current.seekTo(0); current.play() }
+                            interaction++
                         }
                         if(!full) { VideoSeek(shownPosition,duration,buffered,Modifier.weight(1f).padding(horizontal=8.dp),onStart={beginSeek()},onPreview={previewSeek(it)},onFinish={endSeek(true)},onCancel={endSeek(false)}); Text("${time(shownPosition)}/${time(duration)}",quiet.padding(horizontal=4.dp),color=Color.White,fontSize=11.sp,maxLines=1,fontFamily=TimeFont) }
                         else { Spacer(Modifier.weight(1f));TextButton(modifier=quiet,onClick={panel="speed";interaction++}) { Text(if(speed==1f) "倍速" else "${speed}X",color=Color.White) } }
@@ -218,7 +276,12 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                     Text(" / ${time(duration)}",color=Color(0xFFB8B8B8),fontSize=14.sp,fontWeight=androidx.compose.ui.text.font.FontWeight.SemiBold,fontFamily=TimeFont)
                 }
             }
-            error?.let { message -> Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.8f)).padding(12.dp)) { Text(message,color=Color.White);TextButton(onClick={error=null;player.prepare();player.play()}) {Text("重试")} } }
+            error?.let { message -> Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.8f)).padding(12.dp)) { Text(message,color=Color.White);TextButton(onClick={
+                error = null
+                preparingAt = android.os.SystemClock.elapsedRealtime()
+                player?.prepare()
+                player?.play()
+            }) {Text("重试")} } }
             androidx.compose.animation.AnimatedVisibility(
                 visible = volumeLevel != null && panel == null && !suspended,
                 modifier = Modifier.align(Alignment.Center),
@@ -249,8 +312,8 @@ fun ReferenceVideo(file: RemoteFile, title: String, onBack: () -> Unit, onHome: 
                 }
             }
             if(panel!=null) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.CenterEnd) {
-                VideoMenus(panel,full,speed,loop,{panel=null;interaction++},{rate -> speed=rate;player.setPlaybackSpeed(rate)},
-                    {enabled -> loop=enabled;player.repeatMode=if(enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF},
+                VideoMenus(panel,full,speed,loop,{panel=null;interaction++},{rate -> speed=rate;player?.setPlaybackSpeed(rate)},
+                    {enabled -> loop=enabled;player?.repeatMode=if(enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF},
                     onLater,onDownload,{clipboard.setText(androidx.compose.ui.text.AnnotatedString(sourceLink))})
             }
         }

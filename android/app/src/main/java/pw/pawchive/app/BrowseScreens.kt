@@ -61,7 +61,8 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     var searchFocused by remember { mutableStateOf(false) }
     var clearAfterIme by remember { mutableStateOf(false) }
     val density = LocalDensity.current
-    val imeBottom = WindowInsets.ime.getBottom(density)
+    val imeInsets = WindowInsets.ime
+    val imeHidden by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) == 0 } }
     val panelOffset = with(density) { 12.dp.roundToPx() }
     val inputStyle = TextStyle(fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurface,
         platformStyle = PlatformTextStyle(includeFontPadding = false))
@@ -71,8 +72,8 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
     val keyboard = LocalSoftwareKeyboardController.current
     // Keep the input connection alive through the IME exit. Stopping it mid-animation
     // restarts this phone's IME surface and makes the keyboard jump back up.
-    LaunchedEffect(filtering, clearAfterIme, imeBottom) {
-        if ((filtering || clearAfterIme) && imeBottom == 0) { focus.clearFocus(); clearAfterIme = false }
+    LaunchedEffect(filtering, clearAfterIme, imeHidden) {
+        if ((filtering || clearAfterIme) && imeHidden) { focus.clearFocus(); clearAfterIme = false }
     }
     LaunchedEffect(pager) {
         snapshotFlow { pager.isScrollInProgress }.filter { it }.collect { filtering = false; focus.clearFocus() }
@@ -122,7 +123,7 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             val pageFilters by pageVm.filters.collectAsStateWithLifecycle()
             // Re-entering this composition after a detail page is not a new search.
             // Save the criteria alongside the grid so restoration cannot reset its anchor.
-            val encodedFilters = wireJson.encodeToString(pageFilters)
+            val encodedFilters = remember(pageFilters) { wireJson.encodeToString(pageFilters) }
             var positionedQuery by rememberSaveable { mutableStateOf(pageQuery) }
             var positionedFilters by rememberSaveable { mutableStateOf(encodedFilters) }
             LaunchedEffect(pageQuery, encodedFilters) {
@@ -132,9 +133,13 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                     positionedFilters = encodedFilters
                 }
             }
-            val last by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 } }
-            val visibleCreators = state.creators.filter { author -> blocked.none { it.key == author.key } }
-            val visiblePosts = state.posts.filter { post -> blocked.none { it.key == post.authorKey } }
+            val blockedKeys = remember(blocked) { blocked.mapTo(HashSet()) { it.key } }
+            val visibleCreators = remember(state.creators, blockedKeys) {
+                if (blockedKeys.isEmpty()) state.creators else state.creators.filterNot { it.key in blockedKeys }
+            }
+            val visiblePosts = remember(state.posts, blockedKeys) {
+                if (blockedKeys.isEmpty()) state.posts else state.posts.filterNot { it.authorKey in blockedKeys }
+            }
             val currentPosts by rememberUpdatedState(visiblePosts)
             LaunchedEffect(grid, pageQuery, encodedFilters, hideNovels) {
                 if (page == 1 && hideNovels) snapshotFlow {
@@ -143,8 +148,11 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             }
             val count = if (page == 0) visibleCreators.size else visiblePosts.size
             val loadedCount = if (page == 0) state.creators.size else state.posts.size
-            LaunchedEffect(last, count, loadedCount, state.loading, state.more, state.error) {
-                if (count > 0 && loadedCount > 0 && last >= count - 6 && state.more && !state.loading && state.error == null) pageVm.load(true)
+            val nearEnd by remember(grid, count) { derivedStateOf {
+                (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= count - 6
+            } }
+            LaunchedEffect(nearEnd, count, loadedCount, state.loading, state.more, state.error) {
+                if (count > 0 && loadedCount > 0 && nearEnd && state.more && !state.loading && state.error == null) pageVm.load(true)
             }
             LazyVerticalGrid(columns = GridCells.Fixed(2), state = grid, modifier = Modifier.fillMaxSize().background(if (page == 1) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background).testTag("home_grid_$page"), contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (page == 0) items(visibleCreators, key = { it.key }) { author ->
@@ -169,7 +177,7 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
         }
         // The keyboard owns the transition out. Open the panel only after its inset is zero.
         // Both are in the activity window, so header taps keep the original text-input connection.
-        androidx.compose.animation.AnimatedVisibility(visible = filtering && imeBottom == 0 && !searchFocused,
+        androidx.compose.animation.AnimatedVisibility(visible = filtering && imeHidden && !searchFocused,
             enter = fadeIn(tween(120)) + slideInVertically(tween(160)) { -panelOffset },
             exit = fadeOut(tween(100)) + slideOutVertically(tween(120)) { -panelOffset }) {
             key(filterSession, category) {
@@ -183,12 +191,20 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
 }
 
 @Composable
-fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onPost: (Post) -> Unit) {
+fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onPost: (Post) -> Unit, onAuthor: (Creator) -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val follows by app.follows.collectAsStateWithLifecycle()
+    val blocked by app.blocked.collectAsStateWithLifecycle()
+    val similar by vm.similarCreators.collectAsStateWithLifecycle()
+    val visibleSimilar = remember(similar, blocked) {
+        val blockedKeys = blocked.mapTo(HashSet()) { it.key }
+        similar.filterNot { it.key in blockedKeys }
+    }
     val grid = rememberLazyGridState()
+    val similarRow = rememberLazyListState()
     val last by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 } }
-    LaunchedEffect(last, state.posts.size) { if (state.posts.isNotEmpty() && last >= state.posts.size - 5 && !state.loading && state.error == null) vm.load(true) }
+    val headerCount = if (visibleSimilar.isEmpty()) 1 else 2
+    LaunchedEffect(last, state.posts.size, headerCount) { if (state.posts.isNotEmpty() && last >= headerCount + state.posts.size - 6 && !state.loading && state.error == null) vm.load(true) }
     Page(state.creator?.name ?: "作者", onBack) {
         LazyVerticalGrid(GridCells.Fixed(2), state = grid, contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -202,6 +218,23 @@ fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onP
                     Text(vm.service, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 }
             }
+            if (visibleSimilar.isNotEmpty()) item(key = "similar_creators", span = { GridItemSpan(maxLineSpan) }) {
+                Column(Modifier.fillMaxWidth()) {
+                    Text("相近作者", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 14.dp, bottom = 10.dp))
+                    LazyRow(state = similarRow, modifier = Modifier.fillMaxWidth().testTag("similar_creators_row"),
+                        contentPadding = PaddingValues(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(visibleSimilar, key = { it.key }) { creator ->
+                            Column(Modifier.width(76.dp).clip(RoundedCornerShape(6.dp)).clickable { onAuthor(creator) }
+                                .padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Avatar(creator, Modifier.size(48.dp))
+                                Text(creator.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 6.dp))
+                            }
+                        }
+                    }
+                }
+            }
             items(state.posts, key = { it.key }) { post -> WorkCard(post, app, showMenu = false) { onPost(post) } }
             item(span = { GridItemSpan(maxLineSpan) }) { if (state.loading || state.error != null || state.posts.isEmpty()) StatusContent(state.loading, state.error) { vm.load(false) } }
         }
@@ -212,15 +245,18 @@ fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onP
 fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) -> Unit) {
     val rawPosts by app.feed.collectAsStateWithLifecycle()
     val blocked by app.blocked.collectAsStateWithLifecycle()
-    val posts = remember(rawPosts, blocked) { rawPosts.filter { post -> blocked.none { it.key == post.authorKey } } }
+    val blockedKeys = remember(blocked) { blocked.mapTo(HashSet(blocked.size)) { it.key } }
+    val posts = remember(rawPosts, blockedKeys) { rawPosts.filterNot { it.authorKey in blockedKeys } }
     val follows by app.follows.collectAsStateWithLifecycle()
+    val authorsByKey = remember(follows) { follows.associateBy { it.key } }
     val status by app.repo.feedStatus.collectAsStateWithLifecycle()
     val list = rememberLazyListState()
     LaunchedEffect(app, list) { app.scrollToTop.filter { it == 1 }.collectLatest { list.animateScrollToItem(0) } }
     val refresh = rememberPullToRefreshState()
-    val ordered = remember(follows, posts, blocked) {
-        val times = posts.groupBy { it.authorKey }.mapValues { (_, p) -> p.maxOf { it.feedTimestamp } }
-        follows.filter { author -> blocked.none { it.key == author.key } }.sortedByDescending { maxOf(times[it.key] ?: 0, it.timestamp) }
+    val ordered = remember(follows, posts, blockedKeys) {
+        val times = HashMap<String, Long>()
+        posts.forEach { post -> times.merge(post.authorKey, post.feedTimestamp, ::maxOf) }
+        follows.filterNot { it.key in blockedKeys }.sortedByDescending { maxOf(times[it.key] ?: 0, it.timestamp) }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Text("动态", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
@@ -240,7 +276,7 @@ fun FeedScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
                 if (status.error != null) item(key = "error") { StatusContent(false, status.error) { app.refreshFeed() } }
                 if (posts.isEmpty()) item(key = "empty") { StatusContent(status.running, if (follows.isEmpty()) "关注作者后在这里查看动态" else "暂无动态") }
                 items(posts, key = { it.key }) { post ->
-                    val author = follows.find { it.key == post.authorKey }
+                    val author = authorsByKey[post.authorKey]
                     Column(Modifier.fillMaxWidth().clickable { onPost(post) }.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Box(Modifier.size(48.dp).clickable { if (author != null) onAuthor(author) }, contentAlignment = Alignment.Center) { Avatar(author, Modifier.size(40.dp)) }

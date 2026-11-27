@@ -85,10 +85,20 @@ private suspend fun transfer(context: Context, id: String, progress: (Notificati
         row = row.copy(status = "running", error = null); repo.dao.download(row)
         var offset = if (row.etag != null && partial.exists()) partial.length() else 0L
         if (offset == 0L) partial.delete()
-        val request = Request.Builder().url(row.url)
-        if (offset > 0) request.header("Range", "bytes=$offset-").header("If-Range", row.etag!!)
-        val opened = repo.publicClient.newCall(request.build()).await()
-        if (opened.code == 416) { opened.close(); throw SourceChangedException() }
+        suspend fun open() = repo.publicClient.newCall(Request.Builder().url(row.url).apply {
+            if (offset > 0) header("Range", "bytes=$offset-").header("If-Range", row.etag!!)
+        }.build()).await()
+        var opened = open()
+        if (offset > 0 && (opened.code == 416 || opened.code == 206 &&
+                (opened.header("ETag") != row.etag ||
+                    opened.header("Content-Range")?.substringAfter("bytes ")?.substringBefore('-')?.toLongOrNull() != offset))) {
+            opened.close()
+            partial.delete()
+            offset = 0
+            row = row.copy(bytes = 0, etag = null)
+            repo.dao.download(row)
+            opened = open()
+        }
         opened.requireSuccess().use { response ->
             val etag = response.header("ETag")
             if (response.code == 206) {
@@ -99,18 +109,21 @@ private suspend fun transfer(context: Context, id: String, progress: (Notificati
             val total = body.contentLength().takeIf { it >= 0 }?.plus(offset) ?: -1
             row = row.copy(bytes = offset, total = total, etag = etag); repo.dao.download(row)
             var last = 0L
+            var written = offset
             body.byteStream().use { input -> java.io.FileOutputStream(partial, offset > 0).use { out ->
                 val buffer = ByteArray(65536)
                 while (true) {
                     currentCoroutineContext().ensureActive()
                     val size = input.read(buffer); if (size < 0) break
-                    out.write(buffer, 0, size); row = row.copy(bytes = row.bytes + size)
+                    out.write(buffer, 0, size); written += size
                     if (SystemClock.elapsedRealtime() - last > 750) {
+                        row = row.copy(bytes = written)
                         repo.dao.download(row); progress(TransferRuntime.notification(context, id, row.name, row.bytes, total)); last = SystemClock.elapsedRealtime()
                     }
                 }
                 out.fd.sync()
             } }
+            row = row.copy(bytes = written)
             if (total >= 0 && partial.length() != total) throw IOException("文件尚未完整下载")
         }
         currentCoroutineContext().ensureActive()

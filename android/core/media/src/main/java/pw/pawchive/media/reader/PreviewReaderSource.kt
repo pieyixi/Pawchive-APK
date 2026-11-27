@@ -48,6 +48,7 @@ class PreviewReaderSource(private val context: Context, val files: List<RemoteFi
         val name = key(url)
         locks[(name.hashCode() and Int.MAX_VALUE) % locks.size].withLock {
             val target = File(cacheFolder, name)
+            var committed = false
             if (!target.isFile) {
                 val temp = File(cacheFolder, "$name.${UUID.randomUUID()}.tmp")
                 try {
@@ -68,14 +69,18 @@ class PreviewReaderSource(private val context: Context, val files: List<RemoteFi
                     }
                     require(temp.length() > 0) { "图片响应为空" }
                     if (!temp.renameTo(target)) throw IOException("无法提交图片缓存")
+                    committed = true
                 } finally { temp.delete() }
             }
             target.setLastModified(System.currentTimeMillis())
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(target.path, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) { target.delete(); throw IOException(if (original) "无法识别原图" else "预览不可用，可重试预览或明确选择原图") }
-            if (!original) { dimensions[index] = ReaderPageInfo(bounds.outWidth, bounds.outHeight); cachedPages.update { it + index } }
-            prune(name)
+            if (original || committed || dimensions[index] == null) {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(target.path, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) { target.delete(); throw IOException(if (original) "无法识别原图" else "预览不可用，可重试预览或明确选择原图") }
+                if (!original) dimensions[index] = ReaderPageInfo(bounds.outWidth, bounds.outHeight)
+            }
+            if (!original) cachedPages.update { if (index in it) it else it + index }
+            if (committed) prune(name)
             target
         }
     }
@@ -111,6 +116,7 @@ class PreviewReaderSource(private val context: Context, val files: List<RemoteFi
                 }
                 temp.outputStream().use { merged.compress(Bitmap.CompressFormat.WEBP, 90, it) }
                 if (!temp.renameTo(target)) throw IOException("无法提交双页预览")
+                prune(target.name)
             } finally { merged.recycle(); temp.delete() }
         }
         Uri.fromFile(target)

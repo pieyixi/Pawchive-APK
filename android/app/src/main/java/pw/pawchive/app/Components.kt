@@ -119,19 +119,21 @@ private fun ReferenceFollow(selected: Boolean, onClick: () -> Unit, width: Dp, h
 @OptIn(ExperimentalMaterial3Api::class)
 fun WorkCard(post: Post, app: AppViewModel, showMenu: Boolean = true, onClick: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val sheetScope = rememberCoroutineScope()
-    val favorites by app.favorites.collectAsState()
-    val later by app.later.collectAsState()
-    val blocked by app.blocked.collectAsState()
-    if (menu) ModalBottomSheet(onDismissRequest = { menu = false }, sheetState = sheetState, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(
-                (if (later.any { it.key == post.key }) "移出稍后再看" else "稍后再看") to { app.later(post) },
-                (if (blocked.any { it.key == post.authorKey }) "取消屏蔽作者" else "屏蔽作者") to { app.block(post) },
-                (if (favorites.any { it.key == post.key }) "取消收藏" else "收藏") to { app.favorite(post) }
-            ).forEach { (label, action) ->
-                TextButton(onClick = { sheetScope.launch { sheetState.hide(); menu = false; action() } }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.textButtonColors(containerColor = MaterialTheme.colorScheme.surface)) { Text(label, fontSize = 16.sp) }
+    if (menu) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val sheetScope = rememberCoroutineScope()
+        val favorites by app.favorites.collectAsState()
+        val later by app.later.collectAsState()
+        val blocked by app.blocked.collectAsState()
+        ModalBottomSheet(onDismissRequest = { menu = false }, sheetState = sheetState, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    (if (later.any { it.key == post.key }) "移出稍后再看" else "稍后再看") to { app.later(post) },
+                    (if (blocked.any { it.key == post.authorKey }) "取消屏蔽作者" else "屏蔽作者") to { app.block(post) },
+                    (if (favorites.any { it.key == post.key }) "取消收藏" else "收藏") to { app.favorite(post) }
+                ).forEach { (label, action) ->
+                    TextButton(onClick = { sheetScope.launch { sheetState.hide(); menu = false; action() } }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.textButtonColors(containerColor = MaterialTheme.colorScheme.surface)) { Text(label, fontSize = 16.sp) }
+                }
             }
         }
     }

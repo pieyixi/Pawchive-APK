@@ -56,12 +56,21 @@ class Feed018RulesDeviceTest {
             repo.account.value = AccountState("qa-018", false)
             val cache = "account:qa-018:feed"
             repo.storePosts(cache, listOf(old))
+            repo.dao.metadata(Metadata("feed.sort:$cache", "added"))
+            val sqlite = db.openHelper.writableDatabase
+            sqlite.execSQL("CREATE TABLE qa_removed_posts (postKey TEXT NOT NULL)")
+            sqlite.execSQL("CREATE TRIGGER qa_record_removal AFTER DELETE ON posts BEGIN INSERT INTO qa_removed_posts VALUES (OLD.`key`); END")
             repo.dao.mark(SyncMark(cache, "qa:one", 1_000_000, 0))
             repo.refreshFeed()
             assertNull(repo.feedStatus.value.error)
             assertEquals(listOf("followed", "posts:0"), requests.toList())
             assertEquals(fresh.key, repo.feed().first().first().key)
             assertEquals(1, repo.feedMetrics.value.postRequests)
+            assertEquals(setOf(old.key, fresh.key), repo.dao.posts(cache).map { it.key }.toSet())
+            sqlite.query("SELECT COUNT(*) FROM qa_removed_posts").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Adding a new post must leave existing rows in place", 0, it.getInt(0))
+            }
             requests.clear()
             repo.refreshFeed()
             assertEquals(listOf("followed"), requests.toList())

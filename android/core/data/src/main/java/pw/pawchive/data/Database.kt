@@ -24,6 +24,7 @@ data class Metadata(@PrimaryKey val key: String, val value: String)
 @Dao
 interface PawDao {
     @Upsert suspend fun creators(rows: List<CreatorRow>)
+    @Query("SELECT * FROM creators WHERE `key` IN (:keys)") suspend fun creatorsByKey(keys: List<String>): List<CreatorRow>
     @Query("SELECT * FROM creators WHERE name LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY name COLLATE NOCASE ASC, `key` ASC LIMIT :limit OFFSET :offset")
     suspend fun searchCreators(query: String, offset: Int = 0, limit: Int = 50): List<CreatorRow>
     @androidx.room.RawQuery suspend fun filterCreators(query: androidx.sqlite.db.SupportSQLiteQuery): List<CreatorRow>
@@ -37,7 +38,10 @@ interface PawDao {
     @Upsert suspend fun posts(rows: List<PostRow>)
     @Query("SELECT * FROM posts WHERE scope = :scope ORDER BY time DESC") fun watchPosts(scope: String): Flow<List<PostRow>>
     @Query("SELECT * FROM posts WHERE scope = :scope ORDER BY time DESC") suspend fun posts(scope: String): List<PostRow>
+    @Query("SELECT * FROM posts WHERE scope = :scope ORDER BY time DESC LIMIT :limit OFFSET :offset")
+    suspend fun postPage(scope: String, offset: Int, limit: Int = 50): List<PostRow>
     @Query("DELETE FROM posts WHERE scope = :scope") suspend fun clearPosts(scope: String)
+    @Query("DELETE FROM posts WHERE scope = :scope AND `key` IN (:keys)") suspend fun removePosts(scope: String, keys: List<String>)
     @Query("DELETE FROM posts WHERE scope LIKE :pattern AND scope NOT IN (SELECT substr(`key`,14) FROM metadata WHERE `key` LIKE :metadataPattern ORDER BY CAST(value AS INTEGER) DESC LIMIT :limit)")
     suspend fun trimCaches(pattern: String, metadataPattern: String, limit: Int)
     @Query("DELETE FROM metadata WHERE `key` LIKE 'cache.access:%' AND substr(`key`,14) NOT IN (SELECT DISTINCT scope FROM posts)")

@@ -112,8 +112,20 @@ class NativeSmokeTest {
         val bottom = compose.onNodeWithTag("bottom_navigation").captureToImage().asAndroidBitmap()
         assertEquals(132, bottom.height)
         File(compose.activity.cacheDir, "qa-bottom-navigation.png").outputStream().use { bottom.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        val eye = bottom.getPixel(890, 47)
-        assertTrue("Selected mine icon must have a visible vertical eye", android.graphics.Color.red(eye) - android.graphics.Color.green(eye) > 50)
+        val icon = compose.onNodeWithTag("nav_icon_2", useUnmergedTree = true).captureToImage().asAndroidBitmap()
+        val eyeColumns = (icon.width * .3f).toInt() until (icon.width * .7f).toInt()
+        val eyeRows = (icon.height * .45f).toInt() until (icon.height * .68f).toInt()
+        var strokes = 0
+        var previousColumn = false
+        for (x in eyeColumns) {
+            val hasStroke = eyeRows.count { y ->
+                val ink = icon.getPixel(x, y)
+                android.graphics.Color.red(ink) - android.graphics.Color.green(ink) > 50
+            } >= icon.height * .12f
+            if (hasStroke && !previousColumn) strokes++
+            previousColumn = hasStroke
+        }
+        assertEquals("Selected mine icon must have two visible vertical eyes", 2, strokes)
         compose.runOnUiThread {
             compose.activity.setContent {
                 PawTheme(true) { Surface(Modifier.fillMaxSize()) { Column {
