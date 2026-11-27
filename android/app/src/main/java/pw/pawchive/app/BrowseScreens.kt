@@ -20,6 +20,9 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -214,7 +217,11 @@ fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onP
                         Spacer(Modifier.weight(1f))
                         state.creator?.let { creator -> ProfileFollowButton(follows.any { it.key == creator.key }, { app.follow(creator) }) }
                     }
-                    Text(state.creator?.name ?: vm.user, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
+                    SelectionContainer(Modifier.fillMaxWidth().padding(top = 12.dp)
+                        .filterTextContextMenuComponents { it.key == TextContextMenuKeys.CopyKey }) {
+                        Text(state.creator?.name ?: vm.user, fontSize = 16.sp, lineHeight = 24.sp,
+                            fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth())
+                    }
                     Text(vm.service, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 }
             }
