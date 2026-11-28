@@ -1,6 +1,7 @@
 package pw.pawchive.app
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.pager.PagerState
@@ -9,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -20,6 +22,8 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import coil3.compose.AsyncImage
 import pw.pawchive.data.*
 import pw.pawchive.media.PreviewImage
@@ -92,20 +96,45 @@ fun ProfileFollowButton(selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+fun AvatarFollowBadge(selected: Boolean, creatorName: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    var pending by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    Box(modifier.size(20.dp).clip(CircleShape)
+        .background(if (selected) MaterialTheme.colorScheme.surface else Pink)
+        .clickable(role = Role.Button) { pending = selected }
+        .testTag("home_avatar_follow"),
+        contentAlignment = Alignment.Center) {
+        Icon(if (selected) Icons.Outlined.DoneAll else Icons.Outlined.Add,
+            if (selected) "已关注" else "关注", Modifier.size(14.dp), tint = if (selected) Pink else Color.White)
+    }
+    pending?.let { wasSelected ->
+        FollowConfirmation(wasSelected, creatorName, { pending = null }) {
+            pending = null
+            if (selected == wasSelected) onClick()
+        }
+    }
+}
+
+@Composable
 private fun ConfirmedFollow(selected: Boolean, onClick: () -> Unit, width: Dp, height: Dp, radius: Dp, textSize: TextUnit, tag: String) {
     var confirm by remember { mutableStateOf(false) }
     ReferenceFollow(selected, { if (selected) confirm = true else onClick() }, width, height, radius, textSize, tag)
-    if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("取消关注？") },
-        text = { Text("取消后，该作者将从我的关注中移除。") },
-        confirmButton = { TextButton(onClick = { confirm = false; onClick() }) { Text("取消关注") } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Text("保留关注") } })
+    if (confirm) FollowConfirmation(true, null, { confirm = false }) { confirm = false; onClick() }
+}
+
+@Composable
+private fun FollowConfirmation(selected: Boolean, creatorName: String?, dismiss: () -> Unit, confirm: () -> Unit) {
+    val action = if (selected) "取消关注" else "关注"
+    AlertDialog(onDismissRequest = dismiss, title = { Text("$action？") },
+        text = { Text(if (selected) "取消后，该作者将从我的关注中移除。" else "关注「$creatorName」后，可以在动态中查看更新。") },
+        confirmButton = { TextButton(onClick = confirm) { Text(action) } },
+        dismissButton = { TextButton(onClick = dismiss) { Text(if (selected) "保留关注" else "取消") } })
 }
 @Composable
 private fun ReferenceFollow(selected: Boolean, onClick: () -> Unit, width: Dp, height: Dp, radius: Dp, textSize: TextUnit, tag: String) {
     val dark = MaterialTheme.colorScheme.background.luminance() < .5f
     val background = if (selected) { if (dark) MaterialTheme.colorScheme.surfaceVariant else androidx.compose.ui.graphics.Color(0xFFE4E5E9) } else Pink
     val color = if (selected) { if (dark) MaterialTheme.colorScheme.onSurfaceVariant else androidx.compose.ui.graphics.Color(0xFF969AA0) } else androidx.compose.ui.graphics.Color.White
-    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val interaction = remember { MutableInteractionSource() }
     Box(Modifier.width(width).height(48.dp).clickable(interactionSource = interaction, indication = null, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick).testTag("${tag}_touch"), contentAlignment = Alignment.Center) {
         Row(Modifier.width(width).height(height).clip(RoundedCornerShape(radius)).background(background).indication(interaction, ripple(bounded = true)).testTag("${tag}_visual"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             if (selected) Icon(Icons.Outlined.Menu, null, Modifier.size(12.dp), tint = color)

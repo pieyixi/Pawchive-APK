@@ -68,25 +68,57 @@ class PawRepository(private val context: Context, private val scope: CoroutineSc
     suspend fun setHideMediaLessWorks(value: Boolean) { context.preferences.edit { it[booleanPreferencesKey("hide_media_less_works")] = value } }
     val hideSuspectedNovels: Flow<Boolean> = context.preferences.data.map { it[booleanPreferencesKey("hide_suspected_novels")] ?: false }.distinctUntilChanged()
     suspend fun setHideSuspectedNovels(value: Boolean) { context.preferences.edit { it[booleanPreferencesKey("hide_suspected_novels")] = value } }
-    val novelVerdicts = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    private val novelGate = Semaphore(2)
-    suspend fun inspectNovels(posts: List<Post>) = coroutineScope {
-        posts.filter { it.novelCandidate }.distinctBy { it.key }.map { post -> async(Dispatchers.IO) {
-            novelGate.withPermit {
-                val revision = post.edited?.toString().orEmpty() + ":" + post.published?.toString().orEmpty()
-                val key = "novel.v1:${post.key}"
-                val cached = dao.metadata(key)?.let { runCatching { wireJson.decodeFromString<NovelVerdict>(it) }.getOrNull() }
-                val result = cached?.takeIf { it.revision == revision && System.currentTimeMillis() - it.checkedAt in 0..604_800_000L }
-                    ?: runCatching {
-                        val full = withTimeoutOrNull(12_000) { api.post(post.service, post.user, post.id) } ?: return@withPermit
-                        NovelVerdict(full.isSuspectedNovel(), System.currentTimeMillis(), revision).also {
-                            dao.metadata(Metadata(key, wireJson.encodeToString(it)))
-                        }
-                    }.getOrElse { if (it is CancellationException) throw it; return@withPermit }
-                novelVerdicts.update { (it + (post.key to result.suspect)).entries.toList().takeLast(512).associate { row -> row.toPair() } }
+    private val novelGate = Semaphore(3)
+
+    /** Emit ready results in site order, before they can enter the visible list. */
+    suspend fun filterSearchNovels(posts: List<Post>, onKept: (List<Post>) -> Unit): Int = coroutineScope {
+        val candidates = withContext(Dispatchers.Default) { posts.map { it.takeIf(Post::novelCandidate)?.let { post -> "novel.v1:${post.key}" } } }
+        val keys = candidates.filterNotNull()
+        val cached = if (keys.isEmpty()) emptyMap() else dao.metadataRows(keys).associate { it.key to it.value }
+        val decisions = posts.mapIndexed { index, post ->
+            candidates[index]?.let { key -> async(Dispatchers.Default) { novelDecision(post, key, cached[key]) } }
+        }
+        val ready = mutableListOf<Post>()
+        val updates = mutableListOf<Metadata>()
+        var keptCount = 0
+        for ((index, post) in posts.withIndex()) {
+            val decision = decisions[index]
+            if (decision != null && !decision.isCompleted && ready.isNotEmpty()) {
+                onKept(ready.toList())
+                ready.clear()
             }
-        } }.awaitAll()
-        dao.novelVerdictMetadata().sortedByDescending { runCatching { wireJson.decodeFromString<NovelVerdict>(it.value).checkedAt }.getOrDefault(0) }.drop(1000).forEach { dao.removeMetadata(it.key) }
+            val result = decision?.await()
+            result?.second?.let(updates::add)
+            if (decision == null || result?.first == true) {
+                ready += post.compact()
+                keptCount++
+            }
+        }
+        if (ready.isNotEmpty()) onKept(ready)
+        if (updates.isNotEmpty()) db.withTransaction {
+            dao.metadata(updates)
+            dao.novelVerdictMetadata()
+                .sortedByDescending { row -> runCatching { wireJson.decodeFromString<NovelVerdict>(row.value).checkedAt }.getOrDefault(0) }
+                .drop(1000).forEach { dao.removeMetadata(it.key) }
+        }
+        keptCount
+    }
+
+    private suspend fun novelDecision(post: Post, key: String, cachedValue: String?): Pair<Boolean, Metadata?> {
+        val revision = post.edited?.toString().orEmpty() + ":" + post.published?.toString().orEmpty()
+        val cached = cachedValue?.let { runCatching { wireJson.decodeFromString<NovelVerdict>(it) }.getOrNull() }
+        if (cached != null && cached.revision == revision && System.currentTimeMillis() - cached.checkedAt in 0..604_800_000L) {
+            return !cached.suspect to null
+        }
+        val full = if (post.content.isNotBlank()) post else try {
+            withTimeoutOrNull(7_000) { novelGate.withPermit { api.post(post.service, post.user, post.id) } }
+        } catch (_: IOException) {
+            null
+        } catch (_: retrofit2.HttpException) {
+            null
+        } ?: return false to null
+        val verdict = NovelVerdict(full.isSuspectedNovel(), System.currentTimeMillis(), revision)
+        return !verdict.suspect to Metadata(key, wireJson.encodeToString(verdict))
     }
     val readerSettings: Flow<ReaderSettings> = context.preferences.data.map {
         it[stringPreferencesKey("reader_options")]?.let { raw -> runCatching { wireJson.decodeFromString<ReaderSettings>(raw) }.getOrNull() } ?: ReaderSettings()

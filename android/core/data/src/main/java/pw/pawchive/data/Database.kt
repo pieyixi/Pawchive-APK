@@ -61,6 +61,7 @@ interface PawDao {
     @Query("SELECT * FROM downloads WHERE status IN ('queued','running')") suspend fun unfinishedDownloads(): List<DownloadRow>
     @Upsert suspend fun metadata(row: Metadata)
     @Query("SELECT value FROM metadata WHERE `key` = :key") suspend fun metadata(key: String): String?
+    @Query("SELECT * FROM metadata WHERE `key` IN (:keys)") suspend fun metadataRows(keys: List<String>): List<Metadata>
     @Query("DELETE FROM metadata WHERE `key` = :key") suspend fun removeMetadata(key: String)
 }
 

@@ -1,8 +1,12 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package pw.pawchive.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -12,6 +16,8 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.lazy.grid.*
@@ -20,9 +26,6 @@ import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
-import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -31,8 +34,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.*
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -53,7 +60,6 @@ import pw.pawchive.media.PreviewImage
 @Composable
 fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) -> Unit, onMine: () -> Unit) {
     val blocked by app.blocked.collectAsStateWithLifecycle()
-    val hideNovels by app.hideSuspectedNovels.collectAsStateWithLifecycle()
     val pager = rememberPagerState(initialPage = 1, pageCount = { 2 })
     val category = pager.currentPage
     val vm: HomeViewModel = viewModel(key = "home-page-$category", factory = vmFactory { HomeViewModel(app.repo, it, category) })
@@ -143,12 +149,6 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             val visiblePosts = remember(state.posts, blockedKeys) {
                 if (blockedKeys.isEmpty()) state.posts else state.posts.filterNot { it.authorKey in blockedKeys }
             }
-            val currentPosts by rememberUpdatedState(visiblePosts)
-            LaunchedEffect(grid, pageQuery, encodedFilters, hideNovels) {
-                if (page == 1 && hideNovels) snapshotFlow {
-                    grid.layoutInfo.visibleItemsInfo.mapNotNull { currentPosts.getOrNull(it.index) }
-                }.collect { pageVm.inspectVisible(it) }
-            }
             val count = if (page == 0) visibleCreators.size else visiblePosts.size
             val loadedCount = if (page == 0) state.creators.size else state.posts.size
             val nearEnd by remember(grid, count) { derivedStateOf {
@@ -160,10 +160,14 @@ fun HomeScreen(app: AppViewModel, onAuthor: (Creator) -> Unit, onPost: (Post) ->
             LazyVerticalGrid(columns = GridCells.Fixed(2), state = grid, modifier = Modifier.fillMaxSize().background(if (page == 1) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background).testTag("home_grid_$page"), contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (page == 0) items(visibleCreators, key = { it.key }) { author ->
                     Column(Modifier.fillMaxWidth().testTag("home_author_card").clip(RoundedCornerShape(6.dp)).clickable { onAuthor(author) }.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Avatar(author, Modifier.size(76.dp))
-                        Text(author.name, fontSize = 14.sp, maxLines = 2, minLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
+                        Box {
+                            Avatar(author, Modifier.size(76.dp))
+                            AvatarFollowBadge(follows.any { it.key == author.key }, author.name.ifBlank { author.id },
+                                { app.follow(author) }, Modifier.align(Alignment.BottomEnd))
+                        }
+                        Text(author.name.ifBlank { author.id }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 10.dp).testTag("home_author_name"))
                         Text(author.service, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
-                        FollowButton(follows.any { it.key == author.key }, { app.follow(author) })
                     }
                 } else items(visiblePosts, key = { it.key }) { WorkCard(it, app) { onPost(it) } }
                 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -205,45 +209,95 @@ fun AuthorScreen(vm: AuthorViewModel, app: AppViewModel, onBack: () -> Unit, onP
     }
     val grid = rememberLazyGridState()
     val similarRow = rememberLazyListState()
-    val last by remember { derivedStateOf { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 } }
-    val headerCount = if (visibleSimilar.isEmpty()) 1 else 2
-    LaunchedEffect(last, state.posts.size, headerCount) { if (state.posts.isNotEmpty() && last >= headerCount + state.posts.size - 6 && !state.loading && state.error == null) vm.load(true) }
+    val scope = rememberCoroutineScope()
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val transition = updateTransition(expanded && visibleSimilar.isNotEmpty(), label = "Similar creators")
+    val angle by transition.animateFloat(transitionSpec = { PawMotion.section() }, label = "Chevron") { if (it) 180f else 0f }
+    val postCount = state.posts.size
+    val nearEnd by remember(grid, postCount) {
+        derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= postCount - 6 }
+    }
+    LaunchedEffect(nearEnd, postCount, state.loading, state.more, state.error) {
+        if (postCount > 0 && nearEnd && !state.loading && state.more && state.error == null) vm.load(true)
+    }
     Page(state.creator?.name ?: "作者", onBack) {
-        LazyVerticalGrid(GridCells.Fixed(2), state = grid, contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 18.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        Avatar(state.creator, Modifier.size(64.dp))
-                        Spacer(Modifier.weight(1f))
-                        state.creator?.let { creator -> ProfileFollowButton(follows.any { it.key == creator.key }, { app.follow(creator) }) }
-                    }
-                    SelectionContainer(Modifier.fillMaxWidth().padding(top = 12.dp)
-                        .filterTextContextMenuComponents { it.key == TextContextMenuKeys.CopyKey }) {
-                        Text(state.creator?.name ?: vm.user, fontSize = 16.sp, lineHeight = 24.sp,
-                            fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth())
-                    }
-                    Text(vm.service, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                }
+        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Avatar(state.creator, Modifier.size(64.dp).clip(CircleShape).testTag("author_top_avatar")
+                    .clickable(onClickLabel = "作品回到顶部", role = Role.Button) {
+                        if (grid.canScrollBackward) scope.launch { grid.animateScrollToItem(0) }
+                    })
+                Spacer(Modifier.weight(1f))
+                state.creator?.let { creator -> ProfileFollowButton(follows.any { it.key == creator.key }, { app.follow(creator) }) }
             }
-            if (visibleSimilar.isNotEmpty()) item(key = "similar_creators", span = { GridItemSpan(maxLineSpan) }) {
-                Column(Modifier.fillMaxWidth()) {
-                    Text("相近作者", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 14.dp, bottom = 10.dp))
-                    LazyRow(state = similarRow, modifier = Modifier.fillMaxWidth().testTag("similar_creators_row"),
-                        contentPadding = PaddingValues(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(visibleSimilar, key = { it.key }) { creator ->
-                            Column(Modifier.width(76.dp).clip(RoundedCornerShape(6.dp)).clickable { onAuthor(creator) }
-                                .padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Avatar(creator, Modifier.size(48.dp))
-                                Text(creator.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp,
-                                    modifier = Modifier.padding(top = 6.dp))
-                            }
-                        }
+            AuthorName(state.creator?.name?.ifBlank { vm.user } ?: vm.user, canCopy = state.creator != null) {
+                app.messages.tryEmit(AuthorNameCopied)
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(vm.service, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                if (visibleSimilar.isNotEmpty()) {
+                    Row(Modifier.heightIn(min = 48.dp)
+                        .testTag("similar_creators_toggle")
+                        .semantics { stateDescription = if (expanded) "已展开" else "已收起" }
+                        .clickable(interactionSource = null, indication = null, role = Role.Button) { expanded = !expanded }
+                        .padding(start = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("相似作者", fontSize = 13.sp)
+                        Icon(Icons.Outlined.ExpandMore, null, Modifier.padding(start = 4.dp).size(18.dp)
+                            .graphicsLayer { rotationZ = angle })
                     }
                 }
             }
+        }
+        transition.AnimatedVisibility(visible = { it }, enter = expandVertically(PawMotion.section(), expandFrom = Alignment.Top),
+            exit = shrinkVertically(PawMotion.section(), shrinkTowards = Alignment.Top)) {
+            LazyRow(state = similarRow, modifier = Modifier.fillMaxWidth().testTag("similar_creators_row"),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(visibleSimilar, key = { it.key }) { creator ->
+                    Column(Modifier.width(76.dp).clip(RoundedCornerShape(6.dp)).clickable { onAuthor(creator) }
+                        .padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Avatar(creator, Modifier.size(48.dp))
+                        Text(creator.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        }
+        HorizontalDivider(Modifier.testTag("author_works_divider"), color = MaterialTheme.colorScheme.outlineVariant)
+        LazyVerticalGrid(GridCells.Fixed(2), state = grid, modifier = Modifier.weight(1f).testTag("author_works_grid"),
+            contentPadding = PaddingValues(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(state.posts, key = { it.key }) { post -> WorkCard(post, app, showMenu = false) { onPost(post) } }
             item(span = { GridItemSpan(maxLineSpan) }) { if (state.loading || state.error != null || state.posts.isEmpty()) StatusContent(state.loading, state.error) { vm.load(false) } }
+        }
+    }
+}
+
+@Composable
+private fun AuthorName(name: String, canCopy: Boolean, onCopied: () -> Unit) {
+    val context = LocalContext.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val density = LocalDensity.current
+    val nameGap = with(density) { 16.sp.toDp() }
+    Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.Top) {
+        Text(name, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f, fill = false).testTag("author_profile_name"))
+        if (canCopy) {
+            Box(Modifier.padding(start = nameGap).width(36.dp).height(with(density) { 24.sp.toDp() })
+                .clickable(interactionSource = interaction, indication = null, role = Role.Button) {
+                    context.getSystemService(ClipboardManager::class.java)
+                        ?.let { clipboard ->
+                            clipboard.setPrimaryClip(ClipData.newPlainText("作者名", name))
+                            onCopied()
+                        }
+                }.testTag("author_copy_name"),
+                contentAlignment = Alignment.CenterStart) {
+                Icon(Icons.Outlined.ContentCopy, "复制作者名", Modifier.size(11.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = .12f) else androidx.compose.ui.graphics.Color.Transparent),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f))
+            }
         }
     }
 }

@@ -153,8 +153,8 @@ class NativeSmokeTest {
         compose.onNodeWithTag("home_pager").performTouchInput { swipeRight() }
         compose.onNodeWithText("作者").assertIsSelected()
         compose.onNodeWithText("搜索作者").assertIsDisplayed()
-        compose.waitUntil(15000) { compose.onAllNodesWithTag("compact_follow_visual", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodesWithTag("compact_follow_visual", useUnmergedTree = true).onFirst().assertWidthIsEqualTo(72.dp).assertHeightIsEqualTo(24.dp)
+        compose.waitUntil(15000) { compose.onAllNodesWithTag("home_avatar_follow", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithTag("home_avatar_follow", useUnmergedTree = true).onFirst().assertWidthIsEqualTo(20.dp).assertHeightIsEqualTo(20.dp)
         compose.onNodeWithTag("home_grid_0").performScrollToIndex(12)
         val position = compose.onNodeWithTag("home_grid_0").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertTrue(position > 0f)

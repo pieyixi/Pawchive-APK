@@ -37,7 +37,7 @@ class Search019PerformanceTest {
             requests += query
             val media = if ("has:video" in query) "video" else "image"
             val extension = if (media == "video") "mp4" else "png"
-            val posts = (0..49).map { Post("$media-$it", "qa", "qa", file = RemoteFile("file.$extension", "/$it.$extension")) }
+            val posts = (0..49).map { Post("$media-$it", "qa", "qa", content = "<p>Fixture preview</p>", file = RemoteFile("file.$extension", "/$it.$extension")) }
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
                 .body(wireJson.encodeToString(posts).toResponseBody("application/json".toMediaType())).build()
         }.build()

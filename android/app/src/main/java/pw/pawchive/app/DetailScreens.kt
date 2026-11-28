@@ -149,7 +149,7 @@ private fun interpolateRect(start:Rect,end:Rect,fraction:Float)=Rect(
 }
 
 @Composable private fun DetailInfo(post: Post, creator: Creator?, followed: Boolean, onAuthor: () -> Unit, onFollow: () -> Unit) {
-    OneLineExpandableText(AnnotatedString(post.title.ifBlank { "无标题" }),"detail_title",19.sp,27.sp,FontWeight.SemiBold,selectablePreview=true)
+    ExpandableText(AnnotatedString(post.title.ifBlank { "无标题" }),"detail_title",19.sp,27.sp,FontWeight.SemiBold,selectablePreview=true)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.weight(1f).clickable(onClick = onAuthor), verticalAlignment = Alignment.CenterVertically) {
             Avatar(creator, Modifier.size(42.dp))
@@ -231,18 +231,18 @@ private fun FoldedContent(html: String) {
             } }
         }
     }
-    OneLineExpandableText(annotated,"detail_content",14.sp,22.sp)
+    ExpandableText(annotated,"detail_content",14.sp,22.sp,maxLines=2)
 
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun OneLineExpandableText(text:AnnotatedString,tag:String,fontSize:TextUnit,lineHeight:TextUnit,weight:FontWeight?=null,selectablePreview:Boolean=false) {
+@Composable private fun ExpandableText(text:AnnotatedString,tag:String,fontSize:TextUnit,lineHeight:TextUnit,weight:FontWeight?=null,selectablePreview:Boolean=false,maxLines:Int=1) {
     var overflows by remember(text) {mutableStateOf(false)}
     var expanded by rememberSaveable(text.hashCode()) {mutableStateOf(false)}
-    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(),verticalAlignment=if(maxLines==1) Alignment.CenterVertically else Alignment.Bottom) {
         val preview: @Composable () -> Unit = {
             Text(text,Modifier.fillMaxWidth().testTag("${tag}_line"),fontSize=fontSize,lineHeight=lineHeight,fontWeight=weight,
-                maxLines=1,overflow=TextOverflow.Ellipsis,onTextLayout={overflows=it.hasVisualOverflow})
+                maxLines=maxLines,overflow=TextOverflow.Ellipsis,onTextLayout={overflows=it.hasVisualOverflow})
         }
         if (selectablePreview) {
             SelectionContainer(Modifier.weight(1f).filterTextContextMenuComponents { it.key == TextContextMenuKeys.CopyKey }, content = preview)

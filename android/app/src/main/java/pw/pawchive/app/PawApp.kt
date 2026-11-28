@@ -28,6 +28,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.navigationevent.NavigationEvent
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,6 +55,8 @@ import pw.pawchive.media.*
 @Serializable data object TransfersKey : NavKey
 @Serializable data object LoginKey : NavKey
 @Serializable data object SettingsKey : NavKey
+
+internal const val AuthorNameCopied = "作者名已复制到剪贴板"
 
 @Composable
 fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, consumeIncoming: () -> Unit = {}) {
@@ -118,7 +122,8 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     LaunchedEffect(app, accessibility) { app.messages.collectLatest { message ->
         snackbar.currentSnackbarData?.dismiss()
         val baseDuration = if (message == "已取消屏蔽") 1600L else 4000L
-        val duration = accessibility?.calculateRecommendedTimeoutMillis(baseDuration, containsIcons = false, containsText = true, containsControls = false) ?: baseDuration
+        val duration = if (message == AuthorNameCopied) 725L else
+            accessibility?.calculateRecommendedTimeoutMillis(baseDuration, containsIcons = false, containsText = true, containsControls = false) ?: baseDuration
         try { kotlinx.coroutines.withTimeoutOrNull(duration) { snackbar.showSnackbar(message, duration = SnackbarDuration.Indefinite) } }
         finally { snackbar.currentSnackbarData?.dismiss() }
     } }
@@ -161,7 +166,19 @@ fun PawApp(container: AppContainer, dark: Boolean, incoming: String? = null, con
     }
     Surface(Modifier.fillMaxSize()) {
         Scaffold(modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).union(WindowInsets.waterfall)), contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            snackbarHost = { SnackbarHost(snackbar, modifier = Modifier.imePadding()) }) { padding ->
+            snackbarHost = {
+                SnackbarHost(snackbar, modifier = Modifier.imePadding()) { data ->
+                    if (data.visuals.message == AuthorNameCopied) {
+                        Surface(Modifier.padding(bottom = 68.dp), shape = RoundedCornerShape(6.dp),
+                            color = Color.Black.copy(alpha = .64f), contentColor = Color.White) {
+                            Box(Modifier.heightIn(min = 38.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center) {
+                                Text(data.visuals.message, fontSize = 14.sp, lineHeight = 20.sp)
+                            }
+                        }
+                    } else Snackbar(data)
+                }
+            }) { padding ->
             holder.SaveableStateProvider(tab) {
                 NavDisplay(backStack = stack, modifier = Modifier.padding(padding).then(if (stack.size > 1) Modifier.imePadding() else Modifier).clipToBounds(), onBack = { back() },
                     transitionSpec = {

@@ -66,21 +66,13 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
     private var debounceJob: Job? = null
     private var offset = 0
     private var requestId = 0L
-    private var rawPosts = emptyList<Post>()
-    private var mediaOnly = false
-    private var hideNovels = false
-    private fun visiblePosts(): List<Post> = rawPosts.visibleWorks(mediaOnly).filterNot {
-        hideNovels && (query.value.isNotBlank() || !filters.value.isDefault) && repo.novelVerdicts.value[it.key] == true
-    }
-    suspend fun inspectVisible(posts: List<Post>) {
-        if (hideNovels && (query.value.isNotBlank() || !filters.value.isDefault)) repo.inspectNovels(posts)
-    }
     init {
         if (initialCategory == 1) viewModelScope.launch {
-            combine(repo.hideMediaLessWorks, repo.hideSuspectedNovels, repo.novelVerdicts) { media, novels, _ -> media to novels }.collect { (enabled, novels) ->
-                mediaOnly = enabled && (query.value.isNotBlank() || !filters.value.isDefault)
-                hideNovels = novels
-                state.value = state.value.copy(posts = visiblePosts())
+            combine(repo.hideMediaLessWorks, repo.hideSuspectedNovels, ::Pair).distinctUntilChanged().drop(1).collect {
+                if (query.value.isNotBlank() || !filters.value.isDefault) {
+                    debounceJob?.cancel()
+                    load(false)
+                }
             }
         }
         viewModelScope.launch {
@@ -130,9 +122,24 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
                         }
                     }
                 } else {
-                    mediaOnly = repo.hideMediaLessWorks.first() && (q.isNotBlank() || !options.isDefault)
                     val popular = q.isBlank() && options.isDefault
+                    val mediaOnly = !popular && repo.hideMediaLessWorks.first()
+                    val hideNovels = !popular && repo.hideSuspectedNovels.first()
                     val cache = if (popular) "public:home:popular" else "public:home:$q:${wireJson.encodeToString(options)}"
+                    if (!append) state.value = HomeState(loading = true)
+                    suspend fun accept(posts: List<Post>): Int {
+                        val candidates = posts.visibleWorks(mediaOnly)
+                        fun publish(chunk: List<Post>) {
+                            if (token != requestId) return
+                            state.update { it.copy(posts = (it.posts + chunk).distinctBy(Post::key)) }
+                        }
+                        return if (hideNovels) repo.filterSearchNovels(candidates, ::publish) else {
+                            publish(candidates.map(Post::compact))
+                            candidates.size
+                        }
+                    }
+                    var cachedFallback = emptyList<Post>()
+                    var firstNetworkPage = !append
                     if (!append || popular) {
                         val cachedPage = if (popular) repo.cachedPopularPage(offset) else repo.cachedWorkPage(cache)
                         val cached = cachedPage?.page?.rawPosts ?: repo.cachedPosts(cache)
@@ -140,23 +147,50 @@ class HomeViewModel(private val repo: PawRepository, private val saved: SavedSta
                         if ((cachedPage != null && !popular) || cached.isNotEmpty()) {
                             val maxAge = if (popular) POPULAR_CACHE_MS else 300_000L
                             val fresh = cachedPage != null && System.currentTimeMillis() - cachedPage.checkedAt in 0L until maxAge && (popular || !force)
-                            if (!append || fresh) {
-                                rawPosts = if (append) (rawPosts + cached).distinctBy { it.key } else cached
-                                state.value = HomeState(posts = visiblePosts(), loading = !fresh, more = cachedPage?.page?.more ?: true)
+                            if (fresh) {
+                                val page = cachedPage!!.page
+                                val accepted = accept(cached)
+                                if (token != requestId) return@launch
+                                offset = page.nextOffset
+                                cacheHit = true
+                                if (accepted > 0 || !hideNovels || !page.more) {
+                                    state.update { it.copy(loading = false, more = page.more) }
+                                    return@launch
+                                }
+                                firstNetworkPage = false
+                            } else if (!append) {
+                                if (!hideNovels) accept(cached) else cachedFallback = cached
                             }
-                            if (fresh) { offset = cachedPage!!.page.nextOffset; cacheHit = true; return@launch }
-                        } else if (!append) { rawPosts = emptyList(); state.value = HomeState(loading = true) }
-                        // Expired cache is a display fallback, not the next network offset.
-                        if (!append) offset = 0
+                        }
                     }
-                    val batch = if (popular) repo.fetchPopularPosts(offset).let { WorkSearchPage(it, offset + it.size, it.size == 50) }
-                        else withTimeoutOrNull(20_000) { repo.searchWorkPage(q, offset, mediaOnly, options, !append) } ?: throw java.io.IOException("网站响应较慢，请重试")
-                    if (token == requestId) {
-                        if (!append && !popular) repo.storeWorkPage(cache, batch)
+                    var cursor = offset
+                    var more = true
+                    val fetched = mutableListOf<Post>()
+                    val pageLimit = if (hideNovels) 3 else 1
+                    for (pageIndex in 0 until pageLimit) {
+                        val batch = try {
+                            if (popular) repo.fetchPopularPosts(cursor).let { WorkSearchPage(it, cursor + it.size, it.size == 50) }
+                            else withTimeoutOrNull(20_000) { repo.searchWorkPage(q, cursor, mediaOnly && !hideNovels, options, firstNetworkPage) }
+                                ?: throw java.io.IOException("网站响应较慢，请重试")
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            if (token == requestId && state.value.posts.isEmpty() && cachedFallback.isNotEmpty()) accept(cachedFallback)
+                            throw e
+                        }
                         if (token != requestId) return@launch
-                        rawPosts = (if (append) (rawPosts + batch.rawPosts).distinctBy { it.key } else batch.rawPosts).distinctBy { it.key }.map { it.compact() }
-                        state.value = HomeState(posts = visiblePosts(), more = batch.more); offset = batch.nextOffset
+                        if (firstNetworkPage && !hideNovels) state.update { it.copy(posts = emptyList()) }
+                        val accepted = accept(batch.rawPosts)
+                        if (token != requestId) return@launch
+                        fetched += batch.rawPosts
+                        more = batch.more
+                        cursor = batch.nextOffset
+                        firstNetworkPage = false
+                        if (!more || accepted > 0) break
                     }
+                    if (!append && !popular && !cacheHit) repo.storeWorkPage(cache, WorkSearchPage(fetched, cursor, more))
+                    if (token != requestId) return@launch
+                    offset = cursor
+                    state.update { it.copy(loading = false, more = more) }
                 }
             } catch (e: Exception) { if (e is CancellationException) throw e; if (token == requestId) state.value = state.value.copy(loading = false, error = e.message ?: "加载失败") }
             finally { android.util.Log.d("PawSearch", "page type=$type sort=${options.sort} media=${options.media} cached=$cacheHit elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}") }

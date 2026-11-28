@@ -54,7 +54,9 @@ class DetailHeaderDeviceTest {
                 compose.waitUntil(10000) {compose.onAllNodesWithTag("detail_content_expand").fetchSemanticsNodes().isNotEmpty()}
                 compose.onNodeWithTag("detail_title_expand").assertIsDisplayed()
                 compose.onNodeWithTag("detail_content_expand").assertIsDisplayed()
-                assertTrue("Collapsed body must occupy one line",compose.onNodeWithTag("detail_content_line").fetchSemanticsNode().boundsInRoot.height<=24*activity.resources.displayMetrics.density+1)
+                val bodyHeight = compose.onNodeWithTag("detail_content_line").fetchSemanticsNode().boundsInRoot.height
+                val density = activity.resources.displayMetrics.density
+                assertTrue("Collapsed long body must occupy two lines", bodyHeight > 24 * density && bodyHeight <= 46 * density + 1)
                 val y=compose.onNodeWithText("图片").fetchSemanticsNode().boundsInRoot.top
                 tabTop?.let {assertEquals("Media tabs must not depend on whether a post has video",it,y,1f)}
                 tabTop=y
